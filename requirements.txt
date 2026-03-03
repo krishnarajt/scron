@@ -27,5 +27,5 @@ pydantic-settings==2.1.0
 python-dotenv==1.0.0
 
 # For production deployments
-gunicorn==21.2.0  # Alternative ASGI server
+gunicorn==22.0.0  # Alternative ASGI server
 pyjwt==2.6.0  # For JWT handling
