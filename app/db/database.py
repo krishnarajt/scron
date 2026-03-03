@@ -29,5 +29,5 @@ def get_db():
 
 def init_db():
     """Initialize database tables"""
-    from app.db.models import User, Schedule, Task, RefreshToken, TelegramLinkCode
+    from app.db.models import User, RefreshToken
     Base.metadata.create_all(bind=engine)

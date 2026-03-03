@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
 from typing import Optional
-import os
+import uuid
 import jwt
 import hashlib
 import secrets
 from sqlalchemy.orm import Session
+import os
 
 from app.db.models import User, RefreshToken
 
@@ -68,15 +69,15 @@ def create_access_token(user_id: int, expires_delta: Optional[timedelta] = None)
 
 def create_refresh_token(db: Session, user_id: int) -> str:
     expires_at = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-
-    to_encode = {"sub": str(user_id), "exp": expires_at, "type": "refresh"}
+    # Include a unique identifier to avoid token collisions
+    jti = str(uuid.uuid4())
+    to_encode = {"sub": str(user_id), "exp": expires_at, "type": "refresh", "jti": jti}
     token = jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
     # Store in database
     db_token = RefreshToken(user_id=user_id, token=token, expires_at=expires_at)
     db.add(db_token)
     db.commit()
-
     return token
 
 

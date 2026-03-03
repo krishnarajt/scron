@@ -9,10 +9,6 @@ from datetime import datetime
 
 from app.db.database import init_db
 from app.api.auth_routes import router as auth_router
-from app.api.user_routes import router as user_router
-from app.api.schedule_routes import router as schedule_router
-from app.api.webhook_routes import router as webhook_router
-from app.bot.telegram_bot import process_notifications
 
 
 # Configure logging
@@ -69,16 +65,6 @@ async def lifespan(app: FastAPI):
             logger.critical(f"✗ Failed to initialize database: {e}", exc_info=True)
             raise
 
-        # Check Telegram bot token
-        telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        if telegram_token:
-            logger.info(
-                f"✓ Telegram bot token configured (length: {len(telegram_token)})"
-            )
-        else:
-            logger.warning(
-                "⚠ TELEGRAM_BOT_TOKEN not set - Telegram notifications will be disabled"
-            )
 
         logger.info("=" * 60)
         logger.info("Second Thought Backend is ready!")
@@ -111,7 +97,8 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title="Second Thought Backend",
-    description="Backend API for Second Thought timetable app with Telegram notifications",
+    description="Backend API for managing scheduled cron jobs",
+
     version="1.0.0",
     lifespan=lifespan,
 )
