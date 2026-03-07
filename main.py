@@ -1,6 +1,4 @@
 from dotenv import load_dotenv
-
-load_dotenv()
 import asyncio
 import logging
 import sys
@@ -9,9 +7,10 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime
-
 from app.db.database import init_db
 from app.api.auth_routes import router as auth_router
+
+load_dotenv()
 
 
 # Configure logging

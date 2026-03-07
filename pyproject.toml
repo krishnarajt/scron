@@ -3,7 +3,7 @@ name = "scron"
 version = "1.0.0"
 description = "scron backend - Simpler and more Convenient Cron Scheduler"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.109.0",
     "uvicorn[standard]>=0.27.0",
@@ -17,4 +17,11 @@ dependencies = [
     "pytz>=2024.1",
     "python-multipart>=0.0.6",
     "alembic>=1.13.1",
+    "pre-commit>=4.5.1",
+]
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "ruff",
 ]

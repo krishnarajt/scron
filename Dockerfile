@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+# ── base: shared deps ─────────────────────────────────────────
+FROM python:3.11-slim AS base
 
 WORKDIR /app
 
@@ -8,15 +9,30 @@ RUN apt-get update && apt-get install -y \
     libpq-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy requirements first for caching
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install uv
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
 
-# Copy application code
+# Copy dependency files
+COPY pyproject.toml uv.lock ./
+
+# Install prod dependencies only (no dev, no project code yet)
+RUN uv sync --frozen --no-install-project --no-dev
+
+
+# ── dev: mounts code via volume, runs with reload ─────────────
+FROM base AS dev
+
+# Install dev dependencies too
+RUN uv sync --frozen --no-install-project
+
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+
+# ── prod: copies code, no reload ──────────────────────────────
+FROM base AS prod
+
 COPY . .
 
-# Expose port
 EXPOSE 8000
 
-# Run the application
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"]

@@ -1,14 +1,14 @@
-version: "3.8"
-
 services:
   scron:
+    build:
+      context: .
+      target: dev        # targets the dev stage in Dockerfile
     volumes:
-      # Mount your local code into the container
-      - .:/app
+      - .:/app           # mount local code into container for hot reload
     environment:
-      - ENV=development
-    command: >
-      uvicorn main:app
-      --host 0.0.0.0
-      --port 8000
-      --reload
+      - RELOAD=true
+      - LOG_LEVEL=DEBUG
+      - SECRET_KEY=${SECRET_KEY:-dev-secret-key-not-for-production}
+      - DB_SCHEMA=${DB_SCHEMA:-scron}
+    ports:
+      - "8000:8000"

@@ -4,6 +4,9 @@ from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 import os
 
+from dotenv import load_dotenv
+
+load_dotenv()
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -33,7 +36,6 @@ def get_db():
 
 
 def init_db():
-
     # Step 1: Create schema in its own committed transaction
     with engine.connect() as conn:
         if DB_SCHEMA != "public":

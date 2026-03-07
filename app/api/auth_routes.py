@@ -7,7 +7,6 @@ from app.api.schemas import (
     SignupRequest,
     AuthResponse,
     RefreshRequest,
-    RefreshResponse,
 )
 from app.services.auth_service import (
     authenticate_user,
@@ -15,7 +14,6 @@ from app.services.auth_service import (
     create_access_token,
     create_refresh_token,
     rotate_refresh_token,
-    verify_refresh_token,
     revoke_refresh_token,
 )
 from app.db.models import User
