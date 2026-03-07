@@ -53,3 +53,20 @@ DB_SCHEMA: str = os.getenv("DB_SCHEMA", "public")
 SECRET_KEY: str = os.getenv("SECRET_KEY") or ""
 if not SECRET_KEY:
     raise RuntimeError("SECRET_KEY environment variable is not set!")
+
+# ---------------------------------------------------------------------------
+# Scheduler / job execution settings
+# ---------------------------------------------------------------------------
+
+# Directory where job scripts are materialised before execution.
+# Each script is written to {JOBS_SCRIPTS_DIR}/{job_id}.(py|sh)
+JOBS_SCRIPTS_DIR: str = os.getenv("JOBS_SCRIPTS_DIR", "/tmp/scron_scripts")
+
+# Maximum number of jobs that can run concurrently
+MAX_CONCURRENT_JOBS: int = int(os.getenv("MAX_CONCURRENT_JOBS", "3"))
+
+# How many characters of stderr to capture in error_summary on failure
+MAX_ERROR_SUMMARY_LENGTH: int = int(os.getenv("MAX_ERROR_SUMMARY_LENGTH", "500"))
+
+# Encryption key derivation iterations (PBKDF2 for Fernet key from SECRET_KEY + user salt)
+ENCRYPTION_KEY_ITERATIONS: int = int(os.getenv("ENCRYPTION_KEY_ITERATIONS", "100000"))

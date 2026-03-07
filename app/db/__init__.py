@@ -1,5 +1,5 @@
 from app.db.database import Base, engine, get_db, init_db, SessionLocal
-from app.db.models import User, RefreshToken
+from app.db.models import User, RefreshToken, Job, JobEnvVar, JobExecution
 
 
 __all__ = [
@@ -10,4 +10,7 @@ __all__ = [
     "SessionLocal",
     "User",
     "RefreshToken",
+    "Job",
+    "JobEnvVar",
+    "JobExecution",
 ]

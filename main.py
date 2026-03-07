@@ -1,4 +1,3 @@
-import asyncio
 import logging
 import os
 import sys
@@ -13,6 +12,11 @@ from app.common import constants
 from sqlalchemy import text
 from app.db.database import get_db, init_db
 from app.api.auth_routes import router as auth_router
+from app.api.job_routes import router as jobs_router
+from app.services.scheduler_service import (
+    startup as scheduler_startup,
+    shutdown as scheduler_shutdown,
+)
 from sqlalchemy.orm import Session
 
 
@@ -43,6 +47,7 @@ def setup_logging():
     logging.getLogger("httpx").setLevel(logging.WARNING)
     logging.getLogger("httpcore").setLevel(logging.WARNING)
     logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
 
     logger = logging.getLogger(__name__)
     logger.info(f"Logging configured at {log_level} level")
@@ -55,7 +60,6 @@ logger = setup_logging()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan events with improved error handling"""
-    notification_task = None
 
     try:
         # Startup
@@ -71,6 +75,14 @@ async def lifespan(app: FastAPI):
             logger.critical(f"✗ Failed to initialize database: {e}", exc_info=True)
             raise
 
+        # Start the job scheduler (loads active jobs from DB)
+        try:
+            scheduler_startup()
+            logger.info("✓ Job scheduler started successfully")
+        except Exception as e:
+            logger.critical(f"✗ Failed to start job scheduler: {e}", exc_info=True)
+            raise
+
         logger.info("=" * 60)
         logger.info("scron backend is ready!")
         logger.info("=" * 60)
@@ -83,16 +95,12 @@ async def lifespan(app: FastAPI):
         logger.info("Shutting down scron Backend...")
         logger.info("=" * 60)
 
-        if notification_task:
-            try:
-                notification_task.cancel()
-                await asyncio.wait_for(notification_task, timeout=5.0)
-            except asyncio.CancelledError:
-                logger.info("✓ Notification scheduler stopped")
-            except asyncio.TimeoutError:
-                logger.warning("⚠ Notification scheduler shutdown timed out")
-            except Exception as e:
-                logger.error(f"✗ Error stopping notification scheduler: {e}")
+        # Stop the job scheduler gracefully (waits for running jobs to finish)
+        try:
+            scheduler_shutdown()
+            logger.info("✓ Job scheduler stopped")
+        except Exception as e:
+            logger.error(f"✗ Error stopping job scheduler: {e}")
 
         logger.info("=" * 60)
         logger.info("scron Backend shutdown complete")
@@ -120,6 +128,7 @@ logger.info(f"CORS enabled for origins: {cors_origins}")
 
 # Include routers
 app.include_router(auth_router, prefix="/api")
+app.include_router(jobs_router, prefix="/api")
 
 logger.info("API routers registered")
 

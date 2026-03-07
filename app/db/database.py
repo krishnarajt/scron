@@ -13,7 +13,13 @@ DATABASE_URL = constants.DATABASE_URL
 
 # Read schema from env, default to public
 DB_SCHEMA = constants.DB_SCHEMA
-engine = create_engine(DATABASE_URL, pool_pre_ping=True)
+
+# SQLite requires check_same_thread=False for multi-threaded access (e.g. scheduler)
+_connect_args = {}
+if DATABASE_URL.startswith("sqlite"):
+    _connect_args["check_same_thread"] = False
+
+engine = create_engine(DATABASE_URL, pool_pre_ping=True, connect_args=_connect_args)
 
 SessionLocal = sessionmaker(
     autocommit=False,
