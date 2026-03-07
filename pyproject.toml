@@ -1,7 +1,7 @@
 [project]
 name = "scron"
 version = "1.0.0"
-description = "Second Thought Backend - Timetable API with Telegram notifications"
+description = "scron Backend - Timetable API with Telegram notifications"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -18,17 +18,3 @@ dependencies = [
     "python-multipart>=0.0.6",
     "alembic>=1.13.1",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-asyncio>=0.23.0",
-    "httpx>=0.26.0",
-]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
-
-[tool.pytest.ini_options]
-asyncio_mode = "auto"

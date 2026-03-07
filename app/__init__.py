@@ -1,1 +1,1 @@
-# Second Thought Backend - Second Thought Backend
+# scron Backend - scron Backend

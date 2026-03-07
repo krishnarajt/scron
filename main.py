@@ -9,6 +9,9 @@ from datetime import datetime
 
 from app.db.database import init_db
 from app.api.auth_routes import router as auth_router
+from dotenv import load_dotenv
+
+load_dotenv()
 
 
 # Configure logging
@@ -54,7 +57,7 @@ async def lifespan(app: FastAPI):
     try:
         # Startup
         logger.info("=" * 60)
-        logger.info("Starting Second Thought Backend...")
+        logger.info("Starting scron Backend...")
         logger.info("=" * 60)
 
         # Initialize database
@@ -65,9 +68,8 @@ async def lifespan(app: FastAPI):
             logger.critical(f"✗ Failed to initialize database: {e}", exc_info=True)
             raise
 
-
         logger.info("=" * 60)
-        logger.info("Second Thought Backend is ready!")
+        logger.info("scron Backend is ready!")
         logger.info("=" * 60)
 
         yield
@@ -75,7 +77,7 @@ async def lifespan(app: FastAPI):
     finally:
         # Shutdown
         logger.info("=" * 60)
-        logger.info("Shutting down Second Thought Backend...")
+        logger.info("Shutting down scron Backend...")
         logger.info("=" * 60)
 
         if notification_task:
@@ -90,15 +92,14 @@ async def lifespan(app: FastAPI):
                 logger.error(f"✗ Error stopping notification scheduler: {e}")
 
         logger.info("=" * 60)
-        logger.info("Second Thought Backend shutdown complete")
+        logger.info("scron Backend shutdown complete")
         logger.info("=" * 60)
 
 
 # Create FastAPI app
 app = FastAPI(
-    title="Second Thought Backend",
+    title="scron Backend",
     description="Backend API for managing scheduled cron jobs",
-
     version="1.0.0",
     lifespan=lifespan,
 )
@@ -124,8 +125,8 @@ logger.info("API routers registered")
 def root():
     """Root endpoint"""
     return {
-        "name": "Second Thought Backend",
-        "description": "Second Thought Backend API",
+        "name": "scron Backend",
+        "description": "scron Backend API",
         "version": "1.0.0",
         "status": "running",
         "timestamp": datetime.utcnow().isoformat(),
@@ -152,4 +153,11 @@ if __name__ == "__main__":
 
     logger.info(f"Starting server on port {port}, reload={reload}")
 
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=reload, log_level="info")
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=port,
+        reload=reload,
+        log_level="info",
+        reload_dirs=["app"],  # <-- only watch app/ folder, ignore .env and logs
+    )
