@@ -1,7 +1,7 @@
 [project]
 name = "scron"
 version = "1.0.0"
-description = "scron Backend - Timetable API with Telegram notifications"
+description = "scron backend - Simpler and more Convenient Cron Scheduler"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

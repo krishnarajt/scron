@@ -9,7 +9,6 @@ services:
     environment:
       - DATABASE_URL=postgresql://second_thought:second_thought@postgres:5432/second_thought
       - SECRET_KEY=${SECRET_KEY:-your-super-secret-key-change-me}
-      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN:-}
     depends_on:
       postgres:
         condition: service_healthy

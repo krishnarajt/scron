@@ -14,6 +14,7 @@ from app.services.auth_service import (
     create_user,
     create_access_token,
     create_refresh_token,
+    rotate_refresh_token,
     verify_refresh_token,
     revoke_refresh_token,
 )
@@ -64,20 +65,18 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
     )
 
 
-@router.post("/refresh", response_model=RefreshResponse)
+@router.post("/refresh", response_model=AuthResponse)
 def refresh_token(request: RefreshRequest, db: Session = Depends(get_db)):
-    """Get a new access token using refresh token"""
-    user_id = verify_refresh_token(db, request.refreshToken)
+    result = rotate_refresh_token(db, request.refreshToken)
+    if not result:
+        raise HTTPException(status_code=401, detail="Invalid or expired refresh token")
 
-    if not user_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired refresh token",
-        )
-
-    new_access_token = create_access_token(user_id)
-
-    return RefreshResponse(accessToken=new_access_token)
+    user_id, new_refresh_token = result
+    return AuthResponse(
+        accessToken=create_access_token(user_id),
+        refreshToken=new_refresh_token,
+        message="Token refreshed",
+    )
 
 
 @router.post("/logout")
