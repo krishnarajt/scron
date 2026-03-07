@@ -1,4 +1,7 @@
 from pydantic import BaseModel
+from app.utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 
 class LoginRequest(BaseModel):

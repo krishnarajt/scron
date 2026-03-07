@@ -17,6 +17,9 @@ from app.services.auth_service import (
     revoke_refresh_token,
 )
 from app.db.models import User
+from app.utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 

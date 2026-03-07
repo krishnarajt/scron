@@ -8,6 +8,9 @@ from sqlalchemy.orm import Session
 import os
 
 from app.db.models import User, RefreshToken
+from app.utils.logging_utils import get_logger
+
+logger = get_logger(__name__)
 
 # Configuration
 SECRET_KEY = os.getenv("SECRET_KEY")

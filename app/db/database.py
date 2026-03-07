@@ -2,11 +2,15 @@ from sqlalchemy import create_engine, MetaData
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
+from app.utils.logging_utils import get_logger
+
 import os
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+logger = get_logger(__name__)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
