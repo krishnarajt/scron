@@ -10,4 +10,4 @@ spec:
     - name: http
       port: 8000
       targetPort: 8000
-      nodePort: 32005
+      nodePort: 32006
