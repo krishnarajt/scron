@@ -57,7 +57,3 @@ Thumbs.db
 # Database
 *.db
 *.sqlite3
-
-# uv
-.python-version
-uv.lock
