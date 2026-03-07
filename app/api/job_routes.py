@@ -1,10 +1,7 @@
 """
 API routes for job management, environment variables, execution history,
-manual triggering, and shared requirements.txt management.
+and manual triggering.
 """
-
-import os
-import subprocess
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
@@ -23,13 +20,10 @@ from app.common.schemas import (
     EnvVarResponse,
     EnvVarListResponse,
     ExecutionListResponse,
-    RequirementsUpdateRequest,
-    RequirementsResponse,
     TriggerJobResponse,
 )
 from app.services import job_service
 from app.services.scheduler_service import register_job, unregister_job, trigger_job_now
-from app.common import constants
 from app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -304,62 +298,3 @@ def list_executions(
         db, job_id, limit=limit, offset=offset
     )
     return ExecutionListResponse(executions=executions, total=total)
-
-
-# ---------------------------------------------------------------------------
-# Requirements.txt management
-# ---------------------------------------------------------------------------
-
-_requirements_router = APIRouter(prefix="/requirements", tags=["Requirements"])
-
-
-@_requirements_router.get("", response_model=RequirementsResponse)
-def get_requirements(current_user: User = Depends(get_current_user)):
-    """Get the current shared requirements.txt content."""
-    req_path = os.path.join(constants.JOBS_SCRIPTS_DIR, "requirements.txt")
-    content = ""
-    if os.path.exists(req_path):
-        with open(req_path, "r") as f:
-            content = f.read()
-    return RequirementsResponse(content=content)
-
-
-@_requirements_router.put("", response_model=RequirementsResponse)
-def update_requirements(
-    request: RequirementsUpdateRequest,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Update the shared requirements.txt and run pip install.
-    All jobs share the same Python environment.
-    """
-    os.makedirs(constants.JOBS_SCRIPTS_DIR, exist_ok=True)
-    req_path = os.path.join(constants.JOBS_SCRIPTS_DIR, "requirements.txt")
-
-    with open(req_path, "w") as f:
-        f.write(request.content)
-
-    # Run pip install
-    try:
-        result = subprocess.run(
-            ["pip", "install", "-r", req_path, "--break-system-packages"],
-            capture_output=True,
-            text=True,
-            timeout=300,  # 5 min timeout for pip
-        )
-        install_output = result.stdout + result.stderr
-        if result.returncode != 0:
-            logger.warning(f"pip install exited with code {result.returncode}")
-    except subprocess.TimeoutExpired:
-        install_output = "pip install timed out after 300 seconds"
-    except Exception as e:
-        install_output = f"pip install failed: {str(e)}"
-
-    return RequirementsResponse(
-        content=request.content,
-        last_install_output=install_output[-2000:],  # truncate
-    )
-
-
-# Attach the requirements sub-router to the main router
-router.include_router(_requirements_router)

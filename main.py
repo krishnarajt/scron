@@ -13,6 +13,7 @@ from sqlalchemy import text
 from app.db.database import get_db, init_db
 from app.api.auth_routes import router as auth_router
 from app.api.job_routes import router as jobs_router
+from app.api.config_routes import router as config_router
 from app.services.scheduler_service import (
     startup as scheduler_startup,
     shutdown as scheduler_shutdown,
@@ -129,6 +130,7 @@ logger.info(f"CORS enabled for origins: {cors_origins}")
 # Include routers
 app.include_router(auth_router, prefix="/api")
 app.include_router(jobs_router, prefix="/api")
+app.include_router(config_router, prefix="/api")
 
 logger.info("API routers registered")
 
