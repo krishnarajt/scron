@@ -70,3 +70,7 @@ MAX_ERROR_SUMMARY_LENGTH: int = int(os.getenv("MAX_ERROR_SUMMARY_LENGTH", "500")
 
 # Encryption key derivation iterations (PBKDF2 for Fernet key from SECRET_KEY + user salt)
 ENCRYPTION_KEY_ITERATIONS: int = int(os.getenv("ENCRYPTION_KEY_ITERATIONS", "100000"))
+
+# Number of head/tail lines of combined stdout+stderr to capture per execution
+LOG_HEAD_LINES: int = int(os.getenv("LOG_HEAD_LINES", "50"))
+LOG_TAIL_LINES: int = int(os.getenv("LOG_TAIL_LINES", "50"))

@@ -261,6 +261,7 @@ def complete_execution(
     status: str,
     exit_code: Optional[int] = None,
     error_summary: Optional[str] = None,
+    log_output: Optional[str] = None,
 ) -> JobExecution:
     """
     Mark an execution as completed (success or failure).
@@ -281,6 +282,8 @@ def complete_execution(
     execution.exit_code = exit_code
     if error_summary:
         execution.error_summary = error_summary[:500]  # truncate to 500 chars
+    if log_output:
+        execution.log_output = log_output
 
     db.commit()
     db.refresh(execution)

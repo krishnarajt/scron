@@ -126,6 +126,7 @@ class ExecutionResponse(BaseModel):
     status: str
     exit_code: Optional[int]
     error_summary: Optional[str]
+    log_output: Optional[str]
     created_at: datetime
 
     class Config:

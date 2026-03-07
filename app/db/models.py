@@ -175,6 +175,9 @@ class JobExecution(Base):
     # Short error summary (NOT full logs — just last 500 chars of stderr on failure)
     error_summary = Column(Text, nullable=True)
 
+    # Captured output: first 50 + last 50 lines of combined stdout+stderr
+    log_output = Column(Text, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 

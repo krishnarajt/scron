@@ -220,6 +220,40 @@ def trigger_job_now(job_id: str) -> Optional[int]:
     return None  # execution_id isn't known until the thread starts
 
 
+def _build_log_output(stdout: str, stderr: str) -> str:
+    """
+    Combine stdout + stderr into a single log string, keeping
+    the first N and last N lines to stay within a reasonable DB size.
+    A separator is inserted when lines are truncated from the middle.
+    """
+    head_n = constants.LOG_HEAD_LINES
+    tail_n = constants.LOG_TAIL_LINES
+
+    # Interleave: stdout first, then stderr (subprocess.run captures them separately)
+    parts = []
+    if stdout and stdout.strip():
+        parts.append(stdout.rstrip("\n"))
+    if stderr and stderr.strip():
+        parts.append(f"--- stderr ---\n{stderr.rstrip(chr(10))}")
+    combined = "\n".join(parts)
+
+    if not combined.strip():
+        return ""
+
+    lines = combined.splitlines()
+    total = len(lines)
+
+    if total <= head_n + tail_n:
+        return "\n".join(lines)
+
+    head = lines[:head_n]
+    tail = lines[-tail_n:]
+    skipped = total - head_n - tail_n
+    return (
+        "\n".join(head) + f"\n\n... ({skipped} lines omitted) ...\n\n" + "\n".join(tail)
+    )
+
+
 # ---------------------------------------------------------------------------
 # Job execution — the core orchestrator function
 # ---------------------------------------------------------------------------
@@ -236,8 +270,9 @@ def _execute_job(job_id: str) -> None:
         4. Materialise the script to a temp file on disk.
         5. Decrypt env vars and build a subprocess environment.
         6. Execute the script via subprocess.
-        7. Record result (success/failure, duration, exit code).
-        8. Release the semaphore.
+        7. Capture head+tail of combined stdout/stderr.
+        8. Record result (success/failure, duration, exit code, logs).
+        9. Release the semaphore.
     """
     import subprocess
 
@@ -289,10 +324,17 @@ def _execute_job(job_id: str) -> None:
             cwd=_scripts_dir,
         )
 
+        # Build log output (first N + last N lines of combined stdout+stderr)
+        log_output = _build_log_output(result.stdout or "", result.stderr or "")
+
         # Record success or failure
         if result.returncode == 0:
             job_service.complete_execution(
-                db, execution.id, status="success", exit_code=0
+                db,
+                execution.id,
+                status="success",
+                exit_code=0,
+                log_output=log_output,
             )
             logger.info(f"Job {job_id}: execution {execution.id} succeeded")
         else:
@@ -303,6 +345,7 @@ def _execute_job(job_id: str) -> None:
                 status="failure",
                 exit_code=result.returncode,
                 error_summary=error_summary,
+                log_output=log_output,
             )
             logger.warning(
                 f"Job {job_id}: execution {execution.id} failed "
