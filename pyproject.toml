@@ -1,5 +1,5 @@
 [project]
-name = "second-thought-backend"
+name = "scron"
 version = "1.0.0"
 description = "Second Thought Backend - Timetable API with Telegram notifications"
 readme = "README.md"

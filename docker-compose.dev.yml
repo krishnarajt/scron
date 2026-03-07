@@ -1,7 +1,7 @@
 version: "3.8"
 
 services:
-  second-thought-backend:
+  scron:
     volumes:
       # Mount your local code into the container
       - .:/app
