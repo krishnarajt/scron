@@ -1,28 +1,28 @@
-from dotenv import load_dotenv
 import asyncio
 import logging
+import os
 import sys
 from contextlib import asynccontextmanager
 from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import os
 from datetime import datetime
+
+# central configuration values and environment loading
+from app.common import constants
 
 from sqlalchemy import text
 from app.db.database import get_db, init_db
 from app.api.auth_routes import router as auth_router
 from sqlalchemy.orm import Session
 
-load_dotenv()
-
 
 # Configure logging
 def setup_logging():
     """Configure application-wide logging"""
-    log_level = os.getenv("LOG_LEVEL", "INFO").upper()
+    log_level = constants.LOG_LEVEL
 
-    # Create logs directory if it doesn't exist
-    os.makedirs("logs", exist_ok=True)
+    # Make sure log directory exists
+    os.makedirs(constants.LOG_DIR, exist_ok=True)
 
     # Configure root logger
     logging.basicConfig(
@@ -33,7 +33,8 @@ def setup_logging():
             logging.StreamHandler(sys.stdout),
             # File handler - rotates daily
             logging.FileHandler(
-                f"logs/app_{datetime.now().strftime('%Y%m%d')}.log", encoding="utf-8"
+                f"{constants.LOG_DIR}/app_{datetime.now().strftime('%Y%m%d')}.log",
+                encoding="utf-8",
             ),
         ],
     )
@@ -71,7 +72,7 @@ async def lifespan(app: FastAPI):
             raise
 
         logger.info("=" * 60)
-        logger.info("scron Backend is ready!")
+        logger.info("scron backend is ready!")
         logger.info("=" * 60)
 
         yield
@@ -107,7 +108,7 @@ app = FastAPI(
 )
 
 # CORS middleware
-cors_origins = os.getenv("CORS_ORIGINS", "*").split(",")
+cors_origins = constants.CORS_ORIGINS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=cors_origins,
@@ -153,8 +154,8 @@ def readiness_check():
 if __name__ == "__main__":
     import uvicorn
 
-    port = int(os.getenv("PORT", "8000"))
-    reload = os.getenv("RELOAD", "false").lower() == "true"
+    port = constants.PORT
+    reload = constants.RELOAD
 
     logger.info(f"Starting server on port {port}, reload={reload}")
 

@@ -4,21 +4,15 @@ from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 from app.utils.logging_utils import get_logger
 
-import os
-
-from dotenv import load_dotenv
-
-load_dotenv()
+# central configuration values
+from app.common import constants
 
 logger = get_logger(__name__)
 
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql://postgres:postgres@localhost:5432/postgres",
-)
+DATABASE_URL = constants.DATABASE_URL
 
 # Read schema from env, default to public
-DB_SCHEMA = os.getenv("DB_SCHEMA", "public")
+DB_SCHEMA = constants.DB_SCHEMA
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 
 SessionLocal = sessionmaker(

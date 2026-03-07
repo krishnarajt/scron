@@ -5,17 +5,17 @@ import jwt
 import hashlib
 import secrets
 from sqlalchemy.orm import Session
-import os
 
 from app.db.models import User, RefreshToken
 from app.utils.logging_utils import get_logger
 
+# bring in configuration constants
+from app.common import constants
+
 logger = get_logger(__name__)
 
 # Configuration
-SECRET_KEY = os.getenv("SECRET_KEY")
-if not SECRET_KEY:
-    raise RuntimeError("SECRET_KEY environment variable is not set!")
+SECRET_KEY = constants.SECRET_KEY
 
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
