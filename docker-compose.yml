@@ -9,7 +9,11 @@ services:
       - DB_SCHEMA=${DB_SCHEMA:-scron}
       - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env or environment}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - LOG_DIR=/app/logs
       - RELOAD=false
+    volumes:
+      - app_logs:/app/logs
+      - /app/.venv        # ← this shadows .venv, keeps it inside the container only
     depends_on:
       postgres:
         condition: service_healthy
@@ -37,8 +41,48 @@ services:
     networks:
       - scron-network
 
+  # loki:
+  #   image: grafana/loki:2.9.0
+  #   container_name: scron-loki
+  #   ports:
+  #     - "3100:3100"
+  #   command: -config.file=/etc/loki/local-config.yaml
+  #   restart: unless-stopped
+  #   networks:
+  #     - scron-network
+
+  # promtail:
+  #   image: grafana/promtail:2.9.0
+  #   container_name: scron-promtail
+  #   volumes:
+  #     - app_logs:/app/logs:ro
+  #     - ./promtail-config.yaml:/etc/promtail/config.yaml:ro
+  #   command: -config.file=/etc/promtail/config.yaml
+  #   depends_on:
+  #     - loki
+  #   restart: unless-stopped
+  #   networks:
+  #     - scron-network
+
+  # grafana:
+  #   image: grafana/grafana:latest
+  #   container_name: scron-grafana
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD:-admin}
+  #   volumes:
+  #     - grafana_data:/var/lib/grafana
+  #   depends_on:
+  #     - loki
+  #   restart: unless-stopped
+  #   networks:
+  #     - scron-network
+
 volumes:
   postgres_data:
+  # app_logs:
+  # grafana_data:
 
 networks:
   scron-network:

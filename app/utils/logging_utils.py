@@ -16,14 +16,12 @@ class _Colors:
     BOLD = "\033[1m"
     DIM = "\033[2m"
 
-    # Log level colors
     DEBUG = "\033[36m"  # Cyan
-    INFO = ""  # Bright white
+    INFO = ""  # Default
     WARNING = "\033[33m"  # Yellow
     ERROR = "\033[31m"  # Red
     CRITICAL = "\033[35m"  # Magenta
 
-    # Metadata colors
     TIMESTAMP = "\033[90m"  # Dark gray
     NAME = "\033[96m"  # Light cyan
 
@@ -32,7 +30,7 @@ class _Colors:
 class ISTColorFormatter(logging.Formatter):
     """
     Terminal formatter:
-      - Timestamps converted to IST (UTC+5:30)
+      - Timestamps in IST (UTC+5:30)
       - ANSI colors per log level
       - Shows filename and line number
     """
@@ -93,37 +91,19 @@ class ISTColorFormatter(logging.Formatter):
         return formatted
 
 
-# ---- Structured JSON formatter for log files ----
+# ---- Structured JSON formatter for log file (Grafana-ready) ----
 class JSONFormatter(logging.Formatter):
     """
-    File formatter: emits one JSON object per line.
+    File formatter: one JSON object per line (NDJSON).
+    Compatible with Grafana Loki and similar log aggregators.
+
     Fields: timestamp, level, logger, file, line, function, message,
-            and optionally exc_info / stack_info.
+            and any extra fields passed via extra={} on the log call.
     """
 
-    def formatTime(self, record: logging.LogRecord, datefmt=None) -> str:  # noqa: N802
-        ist_dt = datetime.fromtimestamp(record.created, tz=IST)
-        return ist_dt.isoformat()
-
-    def format(self, record: logging.LogRecord) -> str:
-        log_entry = {
-            "timestamp": self.formatTime(record),
-            "level": record.levelname,
-            "logger": record.name,
-            "file": record.filename,
-            "line": record.lineno,
-            "function": record.funcName,
-            "message": record.getMessage(),
-        }
-
-        if record.exc_info:
-            log_entry["exc_info"] = self.formatException(record.exc_info)
-
-        if record.stack_info:
-            log_entry["stack_info"] = self.formatStack(record.stack_info)
-
-        # Attach any extra fields passed via `extra={}` on the log call
-        standard_keys = {
+    # Fields that are part of the standard LogRecord — not re-emitted as extras
+    _STANDARD_KEYS = frozenset(
+        {
             "name",
             "msg",
             "args",
@@ -147,10 +127,33 @@ class JSONFormatter(logging.Formatter):
             "message",
             "taskName",
         }
+    )
+
+    def formatTime(self, record: logging.LogRecord, datefmt=None) -> str:  # noqa: N802
+        ist_dt = datetime.fromtimestamp(record.created, tz=IST)
+        return ist_dt.isoformat()
+
+    def format(self, record: logging.LogRecord) -> str:
+        log_entry = {
+            "timestamp": self.formatTime(record),
+            "level": record.levelname,
+            "logger": record.name,
+            "file": record.filename,
+            "line": record.lineno,
+            "function": record.funcName,
+            "message": record.getMessage(),
+        }
+
+        if record.exc_info:
+            log_entry["exc_info"] = self.formatException(record.exc_info)
+        if record.stack_info:
+            log_entry["stack_info"] = self.formatStack(record.stack_info)
+
+        # Attach JSON-serialisable extras (e.g. extra={"request_id": "abc"})
         for key, value in record.__dict__.items():
-            if key not in standard_keys:
+            if key not in self._STANDARD_KEYS:
                 try:
-                    json.dumps(value)  # only include JSON-serialisable extras
+                    json.dumps(value)
                     log_entry[key] = value
                 except (TypeError, ValueError):
                     log_entry[key] = str(value)
@@ -158,25 +161,7 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(log_entry, ensure_ascii=False)
 
 
-# ---- Formatter instances ----
-color_formatter = ISTColorFormatter(use_color=True)
-plain_formatter = ISTColorFormatter(use_color=False)  # kept for compatibility
-json_formatter = JSONFormatter()
-
-
-# ---- Root / named-logger bootstrap ----
-def get_logger(name: str) -> logging.Logger:
-    """
-    Return a logger for *name* (typically __name__).
-
-    The first call also configures the root logger so that:
-      - stdout  → human-readable colored output  (INFO+)
-      - any per-document file handler → JSON output (DEBUG+)
-    """
-    _bootstrap_root_logger()
-    return logging.getLogger(name)
-
-
+# ---- Root logger bootstrap (runs once) ----
 _root_bootstrapped = False
 
 
@@ -188,99 +173,77 @@ def _bootstrap_root_logger() -> None:
 
     root = logging.getLogger()
     root.setLevel(logging.DEBUG)
-
-    # Remove pre-existing handlers to avoid duplicates
     root.handlers.clear()
 
+    # --- stdout: colored human-readable, INFO+ ---
     stdout_handler = logging.StreamHandler(sys.stdout)
     stdout_handler.setLevel(logging.INFO)
-    stdout_handler.setFormatter(color_formatter)
+    stdout_handler.setFormatter(ISTColorFormatter(use_color=True))
     root.addHandler(stdout_handler)
 
-    # Third-party library noise suppression
-    logging.getLogger("celery").setLevel(logging.INFO)
-    logging.getLogger("celery.task").setLevel(logging.DEBUG)
-    logging.getLogger("celery.worker").setLevel(logging.INFO)
-    logging.getLogger("uvicorn").setLevel(logging.INFO)
-    logging.getLogger("uvicorn.error").setLevel(logging.INFO)
-    logging.getLogger("uvicorn.access").setLevel(logging.INFO)
-    logging.getLogger("gunicorn").setLevel(logging.INFO)
-    logging.getLogger("redis").setLevel(logging.WARNING)
-    logging.getLogger("kombu").setLevel(logging.WARNING)
-    logging.getLogger("weasyprint").setLevel(logging.CRITICAL)
-    logging.getLogger("weasyprint.progress").setLevel(logging.CRITICAL)
-    logging.getLogger("fontTools").setLevel(logging.CRITICAL)
+    # --- file: rotating JSON (NDJSON), DEBUG+ ---
+    log_dir = os.environ.get("LOG_DIR", "logs")
+    os.makedirs(log_dir, exist_ok=True)
+    log_file_path = os.path.join(log_dir, "app.log")
 
-    _log_startup_banner()
+    file_handler = RotatingFileHandler(
+        log_file_path,
+        maxBytes=50 * 1024 * 1024,  # 50 MB per file
+        backupCount=5,  # keep app.log.1 … app.log.5
+        encoding="utf-8",
+    )
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(JSONFormatter())
+    root.addHandler(file_handler)
+
+    # --- suppress noisy third-party loggers ---
+    for name, level in {
+        "celery": logging.INFO,
+        "celery.task": logging.DEBUG,
+        "celery.worker": logging.INFO,
+        "uvicorn": logging.INFO,
+        "uvicorn.error": logging.INFO,
+        "uvicorn.access": logging.INFO,
+        "gunicorn": logging.INFO,
+        "redis": logging.WARNING,
+        "kombu": logging.WARNING,
+        "weasyprint": logging.CRITICAL,
+        "weasyprint.progress": logging.CRITICAL,
+        "fontTools": logging.CRITICAL,
+    }.items():
+        logging.getLogger(name).setLevel(level)
+
+    _log_startup_banner(log_file_path)
 
 
-def _log_startup_banner() -> None:
-    log = logging.getLogger("Digitization")
+def _log_startup_banner(log_file_path: str) -> None:
+    log = logging.getLogger("Scron")
     environment = os.environ.get("ENVIRONMENT", "unknown")
     log.info("=" * 80)
-    log.info("🚀 Logging initialized for: caf_data_digitization")
+    log.info("🚀 Logging initialized for: scron")
     log.info(f"   Environment : {environment}")
     log.info(f"   Process ID  : {os.getpid()}")
-    log.info("   Log Level   : DEBUG (file) / INFO (stdout)")
-    log.info("   stdout      : human-readable colored")
-    log.info("   file        : structured JSON (per-document)")
+    log.info(f"   Log file    : {os.path.abspath(log_file_path)}")
+    log.info("   stdout      : colored human-readable (INFO+)")
+    log.info("   file        : NDJSON / Grafana-ready (DEBUG+)")
     log.info("   Timezone    : IST (UTC+5:30)")
     log.info("=" * 80)
 
 
-# ---- Per-document rotating JSON file handlers ----
-_document_file_handlers: dict[str, RotatingFileHandler] = {}
+# ---- Public API ----
 
 
-def setup_document_file_handler(document_id: str) -> None:
+def get_logger(name: str) -> logging.Logger:
     """
-    Attach a per-document rotating file handler to the root logger.
-    Writes structured JSON — one object per line.
-    Only active in sandbox/testing environments.
+    Return a named logger. Bootstraps root logger on first call.
 
-    Args:
-        document_id: Used as the log filename (<document_id>.log)
+    Usage:
+        log = get_logger(__name__)
+        log.info("hello")
+        log.warning("something off", extra={"order_id": 42})
     """
-    from app.common.constants import constants  # local import to avoid circular deps
-
-    remove_document_file_handler(document_id)
-
-    resolved_log_dir = constants.LOG_DIR
-    os.makedirs(resolved_log_dir, exist_ok=True)
-
-    log_file_path = os.path.join(resolved_log_dir, f"{document_id}.log")
-
-    file_handler = RotatingFileHandler(
-        log_file_path,
-        maxBytes=10 * 1024 * 1024,  # 10 MB per file
-        backupCount=3,
-        encoding="utf-8",
-    )
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(json_formatter)  # ← JSON in files
-
-    root_logger = logging.getLogger()
-    root_logger.addHandler(file_handler)
-    _document_file_handlers[document_id] = file_handler
-
-    logging.getLogger("Digitization").info(
-        f"[Logging] JSON file handler attached: document_id={document_id} "
-        f"→ {os.path.abspath(log_file_path)}"
-    )
-
-
-def remove_document_file_handler(document_id: str) -> None:
-    """
-    Detach and close the file handler for document_id.
-    Call after document processing is complete.
-    """
-    handler = _document_file_handlers.pop(document_id, None)
-    if handler:
-        logging.getLogger().removeHandler(handler)
-        handler.close()
-        logging.getLogger("Digitization").debug(
-            f"[Logging] JSON file handler removed: document_id={document_id}"
-        )
+    _bootstrap_root_logger()
+    return logging.getLogger(name)
 
 
 # ---- Structured helper functions ----
@@ -319,6 +282,8 @@ def log_task_error(task_name: str, error: Exception, **kwargs) -> None:
 
 
 # ---- Context manager for timed operations ----
+
+
 class LogTimer:
     """Context manager that logs the duration of a block."""
 

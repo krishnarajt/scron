@@ -27,6 +27,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 @router.post("/login", response_model=AuthResponse)
 def login(request: LoginRequest, db: Session = Depends(get_db)):
     """Login with username and password"""
+    logger.info(f"Login attempt for username: {request.username}")
     user = authenticate_user(db, request.username, request.password)
 
     if not user:
