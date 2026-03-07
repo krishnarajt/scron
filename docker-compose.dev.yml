@@ -2,9 +2,9 @@ services:
   scron:
     build:
       context: .
-      target: dev        # targets the dev stage in Dockerfile
+      target: dev
     volumes:
-      - .:/app           # mount local code into container for hot reload
+      - .:/app
     environment:
       - RELOAD=true
       - LOG_LEVEL=DEBUG
@@ -12,3 +12,12 @@ services:
       - DB_SCHEMA=${DB_SCHEMA:-scron}
     ports:
       - "8000:8000"
+    develop:
+      watch:
+        - action: sync
+          path: ./app # adjust to wherever your source code lives
+          target: /app/src
+        - action: rebuild
+          path: ./requirements.txt
+        - action: rebuild
+          path: ./Dockerfile

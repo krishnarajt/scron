@@ -10,8 +10,7 @@ tasks:
   dev:
     desc: Start in development mode
     cmds:
-      - docker compose -f docker-compose.yml -f docker-compose.dev.yml up
-
+      - docker compose -f docker-compose.yml -f docker-compose.dev.yml up --watch
   prod:
     desc: Start in production mode
     cmds:

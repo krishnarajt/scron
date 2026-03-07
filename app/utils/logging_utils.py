@@ -18,7 +18,7 @@ class _Colors:
 
     # Log level colors
     DEBUG = "\033[36m"  # Cyan
-    INFO = "\033[97m"  # Bright white
+    INFO = ""  # Bright white
     WARNING = "\033[33m"  # Yellow
     ERROR = "\033[31m"  # Red
     CRITICAL = "\033[35m"  # Magenta
