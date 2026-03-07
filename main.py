@@ -3,12 +3,15 @@ import asyncio
 import logging
 import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import os
 from datetime import datetime
-from app.db.database import init_db
+
+from sqlalchemy import text
+from app.db.database import get_db, init_db
 from app.api.auth_routes import router as auth_router
+from sqlalchemy.orm import Session
 
 load_dotenv()
 
@@ -133,9 +136,12 @@ def root():
 
 
 @app.get("/health")
-def health_check():
-    """Health check endpoint for k8s"""
-    return {"status": "healthy", "timestamp": datetime.utcnow().isoformat()}
+def health_check(db: Session = Depends(get_db)):
+    try:
+        db.execute(text("SELECT 1"))
+        return {"status": "healthy"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database unavailable")
 
 
 @app.get("/ready")
