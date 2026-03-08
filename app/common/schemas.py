@@ -1,13 +1,10 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional, List
 from datetime import datetime
-from app.utils.logging_utils import get_logger
-
-logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Auth schemas (existing)
+# Auth schemas
 # ---------------------------------------------------------------------------
 
 
@@ -19,6 +16,7 @@ class LoginRequest(BaseModel):
 class SignupRequest(BaseModel):
     username: str
     password: str
+    email: Optional[str] = None
 
 
 class AuthResponse(BaseModel):
@@ -36,6 +34,26 @@ class RefreshResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# User profile schemas
+# ---------------------------------------------------------------------------
+
+
+class UserProfileUpdate(BaseModel):
+    display_name: Optional[str] = None
+    email: Optional[str] = None
+
+
+class UserProfileResponse(BaseModel):
+    id: int
+    username: str
+    display_name: str
+    email: Optional[str]
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
 # Job schemas
 # ---------------------------------------------------------------------------
 
@@ -47,6 +65,9 @@ class JobCreateRequest(BaseModel):
     script_type: str = Field(default="python", pattern="^(python|bash)$")
     cron_expression: str = Field(..., min_length=1, max_length=100)
     is_active: bool = Field(default=True)
+    timeout_seconds: int = Field(default=0, ge=0)
+    depends_on: List[str] = Field(default_factory=list)
+    tag_ids: List[int] = Field(default_factory=list)
 
 
 class JobUpdateRequest(BaseModel):
@@ -56,6 +77,22 @@ class JobUpdateRequest(BaseModel):
     script_type: Optional[str] = Field(default=None, pattern="^(python|bash)$")
     cron_expression: Optional[str] = Field(default=None, min_length=1, max_length=100)
     is_active: Optional[bool] = None
+    timeout_seconds: Optional[int] = Field(default=None, ge=0)
+    depends_on: Optional[List[str]] = None
+    tag_ids: Optional[List[int]] = None
+
+
+class TagBrief(BaseModel):
+    id: int
+    name: str
+    color: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class DependencyBrief(BaseModel):
+    id: str
+    name: str
 
 
 class JobResponse(BaseModel):
@@ -67,11 +104,14 @@ class JobResponse(BaseModel):
     script_type: str
     cron_expression: str
     is_active: bool
+    timeout_seconds: int
+    depends_on: List[str]
+    tags: List[TagBrief] = []
+    dependency_names: List[DependencyBrief] = []
     created_at: datetime
     updated_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class JobListResponse(BaseModel):
@@ -127,10 +167,11 @@ class ExecutionResponse(BaseModel):
     exit_code: Optional[int]
     error_summary: Optional[str]
     log_output: Optional[str]
+    script_version_id: Optional[int]
+    pid: Optional[int]
     created_at: datetime
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 
 class ExecutionListResponse(BaseModel):
@@ -153,10 +194,96 @@ class RequirementsResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Trigger job manually
+# Trigger / Cancel / Replay
 # ---------------------------------------------------------------------------
 
 
 class TriggerJobResponse(BaseModel):
     message: str
     execution_id: Optional[int] = None
+
+
+class CancelJobResponse(BaseModel):
+    message: str
+    cancelled: bool
+
+
+class ReplayExecutionRequest(BaseModel):
+    """Replay a past execution using the exact script version from that run."""
+
+    execution_id: int
+
+
+# ---------------------------------------------------------------------------
+# Tag schemas
+# ---------------------------------------------------------------------------
+
+
+class TagCreateRequest(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100)
+    color: str = Field(default="#6366f1", pattern="^#[0-9a-fA-F]{6}$")
+
+
+class TagUpdateRequest(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+    color: Optional[str] = Field(default=None, pattern="^#[0-9a-fA-F]{6}$")
+
+
+class TagResponse(BaseModel):
+    id: int
+    name: str
+    color: str
+    job_count: int = 0
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TagListResponse(BaseModel):
+    tags: List[TagResponse]
+    total: int
+
+
+# ---------------------------------------------------------------------------
+# Notification settings schemas
+# ---------------------------------------------------------------------------
+
+
+class NotificationSettingsUpdate(BaseModel):
+    telegram_enabled: Optional[bool] = None
+    telegram_chat_id: Optional[str] = None
+    email_enabled: Optional[bool] = None
+    notify_on: Optional[str] = Field(
+        default=None, pattern="^(failure_only|always|never)$"
+    )
+
+
+class NotificationSettingsResponse(BaseModel):
+    telegram_enabled: bool
+    telegram_chat_id: Optional[str]
+    email_enabled: bool
+    notify_on: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ---------------------------------------------------------------------------
+# Job template schemas
+# ---------------------------------------------------------------------------
+
+
+class JobTemplateResponse(BaseModel):
+    id: int
+    name: str
+    description: str
+    category: str
+    script_content: str
+    script_type: str
+    default_cron: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class JobTemplateListResponse(BaseModel):
+    templates: List[JobTemplateResponse]
+    total: int

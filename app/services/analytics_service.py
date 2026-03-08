@@ -8,7 +8,7 @@ Provides data for dashboard charts:
   - Upcoming scheduled runs
 """
 
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case, extract
@@ -33,58 +33,49 @@ def get_overview(db: Session, user_id: int) -> Dict[str, Any]:
     High-level stats for the dashboard header.
     Returns total jobs, active jobs, total executions, success rate,
     average duration, and counts by status.
+
+    Uses a single aggregation query instead of N separate COUNT queries.
     """
-    # Job counts
-    total_jobs = (
-        db.query(func.count(Job.id)).filter(Job.user_id == user_id).scalar() or 0
-    )
-    active_jobs = (
-        db.query(func.count(Job.id))
-        .filter(Job.user_id == user_id, Job.is_active)
-        .scalar()
-        or 0
-    )
-
-    # Execution counts (all time, for user's jobs)
-    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).subquery()
-
-    total_executions = (
-        db.query(func.count(JobExecution.id))
-        .filter(JobExecution.job_id.in_(user_job_ids))
-        .scalar()
-        or 0
-    )
-
-    success_count = (
-        db.query(func.count(JobExecution.id))
-        .filter(JobExecution.job_id.in_(user_job_ids), JobExecution.status == "success")
-        .scalar()
-        or 0
-    )
-
-    failure_count = (
-        db.query(func.count(JobExecution.id))
-        .filter(JobExecution.job_id.in_(user_job_ids), JobExecution.status == "failure")
-        .scalar()
-        or 0
-    )
-
-    running_count = (
-        db.query(func.count(JobExecution.id))
-        .filter(JobExecution.job_id.in_(user_job_ids), JobExecution.status == "running")
-        .scalar()
-        or 0
-    )
-
-    # Average duration (completed only)
-    avg_duration = (
-        db.query(func.avg(JobExecution.duration_seconds))
-        .filter(
-            JobExecution.job_id.in_(user_job_ids),
-            JobExecution.duration_seconds.isnot(None),
+    # Job counts — single query with conditional aggregation
+    job_stats = (
+        db.query(
+            func.count(Job.id).label("total"),
+            func.count(case((Job.is_active == True, 1))).label("active"),  # noqa: E712
         )
-        .scalar()
+        .filter(Job.user_id == user_id)
+        .first()
     )
+
+    total_jobs = job_stats.total or 0
+    active_jobs = job_stats.active or 0
+
+    # Execution counts — single query with conditional aggregation
+    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).scalar_subquery()
+
+    exec_stats = (
+        db.query(
+            func.count(JobExecution.id).label("total"),
+            func.count(case((JobExecution.status == "success", 1))).label("success"),
+            func.count(case((JobExecution.status == "failure", 1))).label("failure"),
+            func.count(case((JobExecution.status == "running", 1))).label("running"),
+            func.avg(
+                case(
+                    (
+                        JobExecution.duration_seconds.isnot(None),
+                        JobExecution.duration_seconds,
+                    )
+                )
+            ).label("avg_duration"),
+        )
+        .filter(JobExecution.job_id.in_(user_job_ids))
+        .first()
+    )
+
+    total_executions = exec_stats.total or 0
+    success_count = exec_stats.success or 0
+    failure_count = exec_stats.failure or 0
+    running_count = exec_stats.running or 0
+    avg_duration = exec_stats.avg_duration
 
     # Success rate
     completed = success_count + failure_count
@@ -112,7 +103,7 @@ def get_execution_timeline(
     Each entry: { date: "2025-03-01", success: 10, failure: 2, running: 0 }
     """
     cutoff = _utcnow() - timedelta(days=days)
-    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).subquery()
+    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).scalar_subquery()
 
     # Query: group by date and status
     rows = (
@@ -165,7 +156,7 @@ def get_hourly_heatmap(
     Each entry: { hour: 14, dow: 2, count: 5 }
     """
     cutoff = _utcnow() - timedelta(days=days)
-    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).subquery()
+    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).scalar_subquery()
 
     rows = (
         db.query(
@@ -189,7 +180,7 @@ def get_job_success_breakdown(db: Session, user_id: int) -> List[Dict[str, Any]]
     Per-job success/failure/running counts.
     Returns: [ { job_id, job_name, success, failure, running, total } ]
     """
-    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).subquery()
+    user_job_ids = db.query(Job.id).filter(Job.user_id == user_id).scalar_subquery()
 
     rows = (
         db.query(
@@ -225,56 +216,58 @@ def get_job_success_breakdown(db: Session, user_id: int) -> List[Dict[str, Any]]
 # ---------------------------------------------------------------------------
 
 
-def get_job_stats(db: Session, job_id: str, user_id: int) -> Dict[str, Any]:
+def get_job_stats(db: Session, job_id: str, user_id: int) -> Optional[Dict[str, Any]]:
     """
     Detailed stats for a single job.
+    Uses a single aggregation query instead of 5+ separate queries.
     """
     job = db.query(Job).filter(Job.id == job_id, Job.user_id == user_id).first()
     if not job:
         return None
 
-    total = (
-        db.query(func.count(JobExecution.id))
+    # Single aggregation query for all execution stats
+    stats = (
+        db.query(
+            func.count(JobExecution.id).label("total"),
+            func.count(case((JobExecution.status == "success", 1))).label("success"),
+            func.count(case((JobExecution.status == "failure", 1))).label("failure"),
+            func.avg(
+                case(
+                    (
+                        JobExecution.duration_seconds.isnot(None),
+                        JobExecution.duration_seconds,
+                    )
+                )
+            ).label("avg_dur"),
+            func.max(
+                case(
+                    (
+                        JobExecution.duration_seconds.isnot(None),
+                        JobExecution.duration_seconds,
+                    )
+                )
+            ).label("max_dur"),
+            func.min(
+                case(
+                    (
+                        JobExecution.duration_seconds.isnot(None),
+                        JobExecution.duration_seconds,
+                    )
+                )
+            ).label("min_dur"),
+        )
         .filter(JobExecution.job_id == job_id)
-        .scalar()
-        or 0
-    )
-    success = (
-        db.query(func.count(JobExecution.id))
-        .filter(JobExecution.job_id == job_id, JobExecution.status == "success")
-        .scalar()
-        or 0
-    )
-    failure = (
-        db.query(func.count(JobExecution.id))
-        .filter(JobExecution.job_id == job_id, JobExecution.status == "failure")
-        .scalar()
-        or 0
+        .first()
     )
 
-    avg_dur = (
-        db.query(func.avg(JobExecution.duration_seconds))
-        .filter(
-            JobExecution.job_id == job_id, JobExecution.duration_seconds.isnot(None)
-        )
-        .scalar()
-    )
-    max_dur = (
-        db.query(func.max(JobExecution.duration_seconds))
-        .filter(
-            JobExecution.job_id == job_id, JobExecution.duration_seconds.isnot(None)
-        )
-        .scalar()
-    )
-    min_dur = (
-        db.query(func.min(JobExecution.duration_seconds))
-        .filter(
-            JobExecution.job_id == job_id, JobExecution.duration_seconds.isnot(None)
-        )
-        .scalar()
-    )
+    total = stats.total or 0
+    success = stats.success or 0
+    failure = stats.failure or 0
+    avg_dur = stats.avg_dur
+    max_dur = stats.max_dur
+    min_dur = stats.min_dur
 
-    # Last execution
+    # Last execution (separate query — needs the actual row)
     last_exec = (
         db.query(JobExecution)
         .filter(JobExecution.job_id == job_id)

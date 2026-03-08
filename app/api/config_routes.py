@@ -6,7 +6,7 @@ Lives under /config/requirements — separate from /jobs to avoid path collision
 import os
 import subprocess
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from app.db.models import User
 from app.api.deps import get_current_user
 from app.common.schemas import RequirementsUpdateRequest, RequirementsResponse
@@ -32,6 +32,7 @@ def get_requirements(current_user: User = Depends(get_current_user)):
 @router.put("/requirements", response_model=RequirementsResponse)
 def update_requirements(
     request: RequirementsUpdateRequest,
+    response: Response,
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -45,6 +46,7 @@ def update_requirements(
         f.write(request.content)
 
     # Run pip install
+    install_success = True
     try:
         result = subprocess.run(
             ["pip", "install", "-r", req_path, "--break-system-packages"],
@@ -55,10 +57,17 @@ def update_requirements(
         install_output = result.stdout + result.stderr
         if result.returncode != 0:
             logger.warning(f"pip install exited with code {result.returncode}")
+            install_success = False
     except subprocess.TimeoutExpired:
         install_output = "pip install timed out after 300 seconds"
+        install_success = False
     except Exception as e:
         install_output = f"pip install failed: {str(e)}"
+        install_success = False
+
+    # Signal partial failure via 207 Multi-Status so the client can detect it
+    if not install_success:
+        response.status_code = 207  # Multi-Status: file saved but install failed
 
     return RequirementsResponse(
         content=request.content,

@@ -1,130 +1,137 @@
-from types import SimpleNamespace
-
-import pytest
-
-from app.api import auth_routes
-
-
-def test_signup_success(client, monkeypatch):
-    monkeypatch.setattr(
-        auth_routes, "create_user", lambda db, username, password: SimpleNamespace(id=1)
-    )
-    monkeypatch.setattr(auth_routes, "create_access_token", lambda user_id: "access-1")
-    monkeypatch.setattr(
-        auth_routes, "create_refresh_token", lambda db, user_id: "refresh-1"
-    )
-
-    response = client.post(
-        "/api/auth/signup", json={"username": "alice", "password": "password123"}
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "accessToken": "access-1",
-        "refreshToken": "refresh-1",
-        "message": "Account created successfully",
-    }
+"""
+Tests for authentication routes — signup, login, refresh, logout,
+rate limiting, token lifecycle.
+"""
 
 
-def test_signup_duplicate_username_returns_400(client, fake_db):
-    fake_db.existing_user = SimpleNamespace(id=99, username="alice")
+class TestSignup:
+    def test_signup_success(self, client):
+        response = client.post(
+            "/api/auth/signup", json={"username": "alice", "password": "password123"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "accessToken" in data
+        assert "refreshToken" in data
+        assert data["message"] == "Account created successfully"
 
-    response = client.post(
-        "/api/auth/signup", json={"username": "alice", "password": "password123"}
-    )
+    def test_signup_with_email(self, client):
+        response = client.post(
+            "/api/auth/signup",
+            json={"username": "bob", "password": "pass123", "email": "bob@example.com"},
+        )
+        assert response.status_code == 200
+        assert "accessToken" in response.json()
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Username already exists"
+    def test_signup_duplicate_username_returns_400(self, client):
+        client.post("/api/auth/signup", json={"username": "alice", "password": "p1"})
+        response = client.post(
+            "/api/auth/signup", json={"username": "alice", "password": "p2"}
+        )
+        assert response.status_code == 400
+        assert response.json()["detail"] == "Username already exists"
 
+    def test_signup_missing_password_returns_422(self, client):
+        response = client.post("/api/auth/signup", json={"username": "alice"})
+        assert response.status_code == 422
 
-def test_login_success(client, monkeypatch):
-    monkeypatch.setattr(
-        auth_routes,
-        "authenticate_user",
-        lambda db, username, password: SimpleNamespace(id=7),
-    )
-    monkeypatch.setattr(auth_routes, "create_access_token", lambda user_id: "access-7")
-    monkeypatch.setattr(
-        auth_routes, "create_refresh_token", lambda db, user_id: "refresh-7"
-    )
+    def test_signup_missing_username_returns_422(self, client):
+        response = client.post("/api/auth/signup", json={"password": "pass"})
+        assert response.status_code == 422
 
-    response = client.post(
-        "/api/auth/login", json={"username": "alice", "password": "password123"}
-    )
-
-    assert response.status_code == 200
-    assert response.json() == {
-        "accessToken": "access-7",
-        "refreshToken": "refresh-7",
-        "message": "Login successful",
-    }
-
-
-def test_login_invalid_credentials_returns_401(client, monkeypatch):
-    monkeypatch.setattr(
-        auth_routes, "authenticate_user", lambda db, username, password: None
-    )
-
-    response = client.post(
-        "/api/auth/login", json={"username": "alice", "password": "wrong"}
-    )
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid username or password"
+    def test_signup_empty_body_returns_422(self, client):
+        response = client.post("/api/auth/signup", json={})
+        assert response.status_code == 422
 
 
-def test_refresh_success(client, monkeypatch):
-    monkeypatch.setattr(
-        auth_routes,
-        "rotate_refresh_token",
-        lambda db, token: (42, "refresh-new-42"),
-    )
-    monkeypatch.setattr(auth_routes, "create_access_token", lambda user_id: "access-42")
+class TestLogin:
+    def test_login_success(self, client):
+        client.post("/api/auth/signup", json={"username": "alice", "password": "pw123"})
+        response = client.post(
+            "/api/auth/login", json={"username": "alice", "password": "pw123"}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "accessToken" in data
+        assert "refreshToken" in data
+        assert data["message"] == "Login successful"
 
-    response = client.post("/api/auth/refresh", json={"refreshToken": "refresh-old-42"})
+    def test_login_wrong_password_returns_401(self, client):
+        client.post("/api/auth/signup", json={"username": "alice", "password": "pw123"})
+        response = client.post(
+            "/api/auth/login", json={"username": "alice", "password": "wrong"}
+        )
+        assert response.status_code == 401
+        assert response.json()["detail"] == "Invalid username or password"
 
-    assert response.status_code == 200
-    assert response.json() == {
-        "accessToken": "access-42",
-        "refreshToken": "refresh-new-42",
-        "message": "Token refreshed",
-    }
+    def test_login_nonexistent_user_returns_401(self, client):
+        response = client.post(
+            "/api/auth/login", json={"username": "ghost", "password": "pw"}
+        )
+        assert response.status_code == 401
 
-
-def test_refresh_invalid_token_returns_401(client, monkeypatch):
-    monkeypatch.setattr(auth_routes, "rotate_refresh_token", lambda db, token: None)
-
-    response = client.post("/api/auth/refresh", json={"refreshToken": "bad-token"})
-
-    assert response.status_code == 401
-    assert response.json()["detail"] == "Invalid or expired refresh token"
-
-
-def test_logout_success(client, monkeypatch):
-    called = {"count": 0}
-
-    def _revoke(db, token):
-        called["count"] += 1
-        return True
-
-    monkeypatch.setattr(auth_routes, "revoke_refresh_token", _revoke)
-
-    response = client.post("/api/auth/logout", json={"refreshToken": "refresh-1"})
-
-    assert response.status_code == 200
-    assert response.json() == {"success": True, "message": "Logged out successfully"}
-    assert called["count"] == 1
+    def test_login_missing_fields_returns_422(self, client):
+        response = client.post("/api/auth/login", json={"username": "alice"})
+        assert response.status_code == 422
 
 
-@pytest.mark.parametrize(
-    "path,payload",
-    [
-        ("/api/auth/signup", {"username": "alice"}),
-        ("/api/auth/login", {"username": "alice"}),
-        ("/api/auth/refresh", {}),
-        ("/api/auth/logout", {}),
-    ],
-)
-def test_auth_routes_validation_errors(client, path, payload):
-    response = client.post(path, json=payload)
-    assert response.status_code == 422
+class TestTokenRefresh:
+    def test_refresh_success(self, client):
+        signup = client.post(
+            "/api/auth/signup", json={"username": "alice", "password": "pw123"}
+        )
+        refresh_token = signup.json()["refreshToken"]
+        response = client.post(
+            "/api/auth/refresh", json={"refreshToken": refresh_token}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert "accessToken" in data
+        assert "refreshToken" in data
+        # New refresh token should differ (rotation)
+        assert data["refreshToken"] != refresh_token
+
+    def test_refresh_invalid_token_returns_401(self, client):
+        response = client.post(
+            "/api/auth/refresh", json={"refreshToken": "invalid.jwt.token"}
+        )
+        assert response.status_code == 401
+
+    def test_refresh_old_token_invalid_after_rotation(self, client):
+        signup = client.post(
+            "/api/auth/signup", json={"username": "alice", "password": "pw123"}
+        )
+        old_token = signup.json()["refreshToken"]
+        # Rotate
+        client.post("/api/auth/refresh", json={"refreshToken": old_token})
+        # Old token should now be revoked
+        response = client.post("/api/auth/refresh", json={"refreshToken": old_token})
+        assert response.status_code == 401
+
+    def test_refresh_missing_token_returns_422(self, client):
+        response = client.post("/api/auth/refresh", json={})
+        assert response.status_code == 422
+
+
+class TestLogout:
+    def test_logout_success(self, client):
+        signup = client.post(
+            "/api/auth/signup", json={"username": "alice", "password": "pw123"}
+        )
+        refresh_token = signup.json()["refreshToken"]
+        response = client.post("/api/auth/logout", json={"refreshToken": refresh_token})
+        assert response.status_code == 200
+        assert response.json()["success"] is True
+
+    def test_refresh_after_logout_fails(self, client):
+        signup = client.post(
+            "/api/auth/signup", json={"username": "alice", "password": "pw123"}
+        )
+        token = signup.json()["refreshToken"]
+        client.post("/api/auth/logout", json={"refreshToken": token})
+        response = client.post("/api/auth/refresh", json={"refreshToken": token})
+        assert response.status_code == 401
+
+    def test_logout_missing_token_returns_422(self, client):
+        response = client.post("/api/auth/logout", json={})
+        assert response.status_code == 422

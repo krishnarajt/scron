@@ -194,7 +194,7 @@ def authenticate_user(db: Session, username: str, password: str) -> Optional[Use
     return user
 
 
-def create_user(db: Session, username: str, password: str) -> User:
+def create_user(db: Session, username: str, password: str, email: str = None) -> User:
     """Create a new user with a hashed password and a unique encryption salt."""
     hashed_password = get_password_hash(password)
     # Generate a unique per-user salt for env var encryption
@@ -203,6 +203,7 @@ def create_user(db: Session, username: str, password: str) -> User:
         username=username,
         password_hash=hashed_password,
         salt=user_salt,
+        email=email,
     )
     db.add(db_user)
     db.commit()

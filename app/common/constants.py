@@ -74,3 +74,20 @@ ENCRYPTION_KEY_ITERATIONS: int = int(os.getenv("ENCRYPTION_KEY_ITERATIONS", "100
 # Number of head/tail lines of combined stdout+stderr to capture per execution
 LOG_HEAD_LINES: int = int(os.getenv("LOG_HEAD_LINES", "50"))
 LOG_TAIL_LINES: int = int(os.getenv("LOG_TAIL_LINES", "50"))
+
+# Default timeout for job execution (seconds). Can be overridden per-job.
+DEFAULT_JOB_TIMEOUT: int = int(os.getenv("DEFAULT_JOB_TIMEOUT", "3600"))
+
+# ---------------------------------------------------------------------------
+# Telegram bot settings
+# ---------------------------------------------------------------------------
+TELEGRAM_BOT_TOKEN: str = os.getenv("TELEGRAM_BOT_TOKEN", "")
+
+# ---------------------------------------------------------------------------
+# Email / SMTP settings (Gmail App Password recommended)
+# ---------------------------------------------------------------------------
+SMTP_HOST: str = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT: int = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER: str = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD: str = os.getenv("SMTP_PASSWORD", "")
+SMTP_FROM: str = os.getenv("SMTP_FROM", "") or SMTP_USER

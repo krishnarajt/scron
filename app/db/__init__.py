@@ -1,5 +1,16 @@
 from app.db.database import Base, engine, get_db, init_db, SessionLocal
-from app.db.models import User, RefreshToken, Job, JobEnvVar, JobExecution
+from app.db.models import (
+    User,
+    RefreshToken,
+    Job,
+    JobEnvVar,
+    JobExecution,
+    JobScriptVersion,
+    Tag,
+    JobTag,
+    NotificationSettings,
+    JobTemplate,
+)
 
 
 __all__ = [
@@ -13,4 +24,9 @@ __all__ = [
     "Job",
     "JobEnvVar",
     "JobExecution",
+    "JobScriptVersion",
+    "Tag",
+    "JobTag",
+    "NotificationSettings",
+    "JobTemplate",
 ]

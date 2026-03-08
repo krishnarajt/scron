@@ -198,18 +198,13 @@ def _bootstrap_root_logger() -> None:
 
     # --- suppress noisy third-party loggers ---
     for name, level in {
-        "celery": logging.INFO,
-        "celery.task": logging.DEBUG,
-        "celery.worker": logging.INFO,
         "uvicorn": logging.INFO,
         "uvicorn.error": logging.INFO,
         "uvicorn.access": logging.INFO,
         "gunicorn": logging.INFO,
-        "redis": logging.WARNING,
-        "kombu": logging.WARNING,
-        "weasyprint": logging.CRITICAL,
-        "weasyprint.progress": logging.CRITICAL,
-        "fontTools": logging.CRITICAL,
+        "apscheduler": logging.WARNING,
+        "httpx": logging.WARNING,
+        "httpcore": logging.WARNING,
     }.items():
         logging.getLogger(name).setLevel(level)
 
@@ -217,7 +212,7 @@ def _bootstrap_root_logger() -> None:
 
 
 def _log_startup_banner(log_file_path: str) -> None:
-    log = logging.getLogger("Scron")
+    log = logging.getLogger("scron")
     environment = os.environ.get("ENVIRONMENT", "unknown")
     log.info("=" * 80)
     log.info("🚀 Logging initialized for: scron")
@@ -250,7 +245,7 @@ def get_logger(name: str) -> logging.Logger:
 
 
 def log_task_start(task_name: str, **kwargs) -> None:
-    log = logging.getLogger("Digitization")
+    log = logging.getLogger("scron")
     log.info("=" * 80)
     log.info(f"🚀 TASK STARTED: {task_name}")
     for key, value in kwargs.items():
@@ -259,7 +254,7 @@ def log_task_start(task_name: str, **kwargs) -> None:
 
 
 def log_task_end(task_name: str, duration: float = None, **kwargs) -> None:
-    log = logging.getLogger("Digitization")
+    log = logging.getLogger("scron")
     log.info("=" * 80)
     log.info(f"✅ TASK COMPLETED: {task_name}")
     if duration is not None:
@@ -270,7 +265,7 @@ def log_task_end(task_name: str, duration: float = None, **kwargs) -> None:
 
 
 def log_task_error(task_name: str, error: Exception, **kwargs) -> None:
-    log = logging.getLogger("Digitization")
+    log = logging.getLogger("scron")
     log.error("=" * 80)
     log.error(f"❌ TASK FAILED: {task_name}")
     log.error(f"   Error: {type(error).__name__}: {str(error)}")
@@ -291,7 +286,7 @@ class LogTimer:
         self.operation_name = operation_name
         self.log_level = log_level
         self.start_time: datetime | None = None
-        self._log = logging.getLogger("Digitization")
+        self._log = logging.getLogger("scron")
 
     def __enter__(self):
         self.start_time = datetime.now()

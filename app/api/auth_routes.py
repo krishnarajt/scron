@@ -17,6 +17,7 @@ from app.services.auth_service import (
     revoke_refresh_token,
 )
 from app.db.models import User
+from app.api.rate_limit import rate_limit_auth, rate_limit_login
 from app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -25,7 +26,11 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 
 
 @router.post("/login", response_model=AuthResponse)
-def login(request: LoginRequest, db: Session = Depends(get_db)):
+def login(
+    request: LoginRequest,
+    _rate_limit: None = Depends(rate_limit_login),
+    db: Session = Depends(get_db),
+):
     """Login with username and password"""
     logger.info(f"Login attempt for username: {request.username}")
     user = authenticate_user(db, request.username, request.password)
@@ -45,7 +50,11 @@ def login(request: LoginRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/signup", response_model=AuthResponse)
-def signup(request: SignupRequest, db: Session = Depends(get_db)):
+def signup(
+    request: SignupRequest,
+    _rate_limit: None = Depends(rate_limit_auth),
+    db: Session = Depends(get_db),
+):
     """Create a new user account"""
     # Check if username exists
     existing_user = db.query(User).filter(User.username == request.username).first()
@@ -55,7 +64,7 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
         )
 
     # Create user
-    user = create_user(db, request.username, request.password)
+    user = create_user(db, request.username, request.password, email=request.email)
 
     access_token = create_access_token(user.id)
     refresh_token = create_refresh_token(db, user.id)
@@ -68,7 +77,11 @@ def signup(request: SignupRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/refresh", response_model=AuthResponse)
-def refresh_token(request: RefreshRequest, db: Session = Depends(get_db)):
+def refresh_token(
+    request: RefreshRequest,
+    _rate_limit: None = Depends(rate_limit_auth),
+    db: Session = Depends(get_db),
+):
     result = rotate_refresh_token(db, request.refreshToken)
     if not result:
         raise HTTPException(status_code=401, detail="Invalid or expired refresh token")

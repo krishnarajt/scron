@@ -30,5 +30,9 @@ dev = [
     "httpx>=0.28.1",
     "pre-commit",
     "pytest>=9.0.2",
+    "pytest-asyncio>=0.23.0",
     "ruff",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

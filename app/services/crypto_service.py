@@ -12,16 +12,14 @@ values become unrecoverable — by design.
 import base64
 import hashlib
 
+from functools import lru_cache
+
 from cryptography.fernet import Fernet
 
 from app.common import constants
 from app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
-
-# Cache derived Fernet instances per user_salt to avoid re-deriving on every call.
-# In a single-user app this cache will have exactly one entry.
-_fernet_cache: dict[str, Fernet] = {}
 
 
 def _derive_fernet_key(user_salt: str) -> bytes:
@@ -39,12 +37,11 @@ def _derive_fernet_key(user_salt: str) -> bytes:
     return base64.urlsafe_b64encode(raw_key)
 
 
+@lru_cache(maxsize=128)
 def _get_fernet(user_salt: str) -> Fernet:
-    """Return a cached Fernet instance for the given user salt."""
-    if user_salt not in _fernet_cache:
-        key = _derive_fernet_key(user_salt)
-        _fernet_cache[user_salt] = Fernet(key)
-    return _fernet_cache[user_salt]
+    """Return a cached Fernet instance for the given user salt (bounded to 128 entries)."""
+    key = _derive_fernet_key(user_salt)
+    return Fernet(key)
 
 
 def encrypt_value(plaintext: str, user_salt: str) -> str:
@@ -69,4 +66,4 @@ def decrypt_value(ciphertext: str, user_salt: str) -> str:
 
 def clear_cache() -> None:
     """Clear the Fernet key cache (useful for testing or key rotation)."""
-    _fernet_cache.clear()
+    _get_fernet.cache_clear()

@@ -1,6 +1,6 @@
 """
 Business logic for managing jobs, their environment variables,
-and execution history records.
+execution history records, tags, templates, and DAG dependencies.
 
 All DB operations go through this module.  The scheduler and API
 routes call these functions — they never touch models directly.
@@ -11,7 +11,17 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 
-from app.db.models import Job, JobEnvVar, JobExecution, JobScriptVersion, User
+from app.db.models import (
+    Job,
+    JobEnvVar,
+    JobExecution,
+    JobScriptVersion,
+    User,
+    Tag,
+    JobTag,
+    NotificationSettings,
+    JobTemplate,
+)
 from app.services.crypto_service import encrypt_value, decrypt_value
 from app.utils.logging_utils import get_logger
 
@@ -35,6 +45,37 @@ def _get_user_salt(db: Session, user_id: int) -> str:
     return user.salt
 
 
+def _enrich_job_response(db: Session, job: Job) -> dict:
+    """Add tags and dependency names to a job for API response."""
+    tags = (
+        db.query(Tag)
+        .join(JobTag, JobTag.tag_id == Tag.id)
+        .filter(JobTag.job_id == job.id)
+        .all()
+    )
+    dep_names = []
+    if job.depends_on:
+        deps = db.query(Job.id, Job.name).filter(Job.id.in_(job.depends_on)).all()
+        dep_names = [{"id": d.id, "name": d.name} for d in deps]
+
+    return {
+        "id": job.id,
+        "user_id": job.user_id,
+        "name": job.name,
+        "description": job.description,
+        "script_content": job.script_content,
+        "script_type": job.script_type,
+        "cron_expression": job.cron_expression,
+        "is_active": job.is_active,
+        "timeout_seconds": job.timeout_seconds,
+        "depends_on": job.depends_on or [],
+        "tags": [{"id": t.id, "name": t.name, "color": t.color} for t in tags],
+        "dependency_names": dep_names,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Job CRUD
 # ---------------------------------------------------------------------------
@@ -49,7 +90,10 @@ def create_job(
     description: str = "",
     script_type: str = "python",
     is_active: bool = True,
-) -> Job:
+    timeout_seconds: int = 0,
+    depends_on: List[str] = None,
+    tag_ids: List[int] = None,
+) -> dict:
     """Create a new job and return it. Also saves the initial script as version 1."""
     job = Job(
         user_id=user_id,
@@ -59,6 +103,8 @@ def create_job(
         script_type=script_type,
         cron_expression=cron_expression,
         is_active=is_active,
+        timeout_seconds=timeout_seconds,
+        depends_on=depends_on or [],
     )
     db.add(job)
     db.flush()  # get job.id without committing
@@ -73,10 +119,15 @@ def create_job(
     )
     db.add(version)
 
+    # Associate tags
+    if tag_ids:
+        for tid in tag_ids:
+            db.add(JobTag(job_id=job.id, tag_id=tid))
+
     db.commit()
     db.refresh(job)
     logger.info(f"Created job '{name}' (id={job.id}) for user {user_id}")
-    return job
+    return _enrich_job_response(db, job)
 
 
 def get_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
@@ -84,15 +135,27 @@ def get_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
     return db.query(Job).filter(Job.id == job_id, Job.user_id == user_id).first()
 
 
-def list_jobs(db: Session, user_id: int) -> Tuple[List[Job], int]:
-    """Return all jobs for a user and a total count."""
-    query = db.query(Job).filter(Job.user_id == user_id).order_by(Job.created_at.desc())
-    total = query.count()
-    jobs = query.all()
-    return jobs, total
+def get_job_response(db: Session, job_id: str, user_id: int) -> Optional[dict]:
+    """Get a single job enriched with tags and dependency names."""
+    job = get_job(db, job_id, user_id)
+    if not job:
+        return None
+    return _enrich_job_response(db, job)
 
 
-def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job]:
+def list_jobs(db: Session, user_id: int, tag_id: int = None) -> Tuple[List[dict], int]:
+    """Return all jobs for a user, optionally filtered by tag."""
+    query = db.query(Job).filter(Job.user_id == user_id)
+    if tag_id:
+        query = query.join(JobTag, JobTag.job_id == Job.id).filter(
+            JobTag.tag_id == tag_id
+        )
+    jobs = query.order_by(Job.created_at.desc()).all()
+    enriched = [_enrich_job_response(db, j) for j in jobs]
+    return enriched, len(enriched)
+
+
+def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[dict]:
     """
     Update fields on an existing job.
     Only keys present in kwargs (and not None) are updated.
@@ -102,6 +165,9 @@ def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job
     job = get_job(db, job_id, user_id)
     if not job:
         return None
+
+    # Handle tag_ids separately
+    tag_ids = kwargs.pop("tag_ids", None)
 
     # Detect if script content is changing
     new_script = kwargs.get("script_content")
@@ -114,6 +180,8 @@ def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job
         "script_type",
         "cron_expression",
         "is_active",
+        "timeout_seconds",
+        "depends_on",
     }
     for key, value in kwargs.items():
         if key in updatable_fields and value is not None:
@@ -121,7 +189,6 @@ def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job
 
     # Save a new script version if script changed
     if script_changed:
-        # Get the latest version number
         latest = (
             db.query(func.max(JobScriptVersion.version))
             .filter(JobScriptVersion.job_id == job_id)
@@ -136,10 +203,16 @@ def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job
         )
         db.add(version)
 
+    # Update tags if provided
+    if tag_ids is not None:
+        db.query(JobTag).filter(JobTag.job_id == job_id).delete()
+        for tid in tag_ids:
+            db.add(JobTag(job_id=job_id, tag_id=tid))
+
     db.commit()
     db.refresh(job)
     logger.info(f"Updated job '{job.name}' (id={job.id})")
-    return job
+    return _enrich_job_response(db, job)
 
 
 def delete_job(db: Session, job_id: str, user_id: int) -> bool:
@@ -168,7 +241,6 @@ def set_env_var(
     user_salt = _get_user_salt(db, user_id)
     encrypted = encrypt_value(var_value, user_salt)
 
-    # Upsert: check if this key already exists for the job
     existing = (
         db.query(JobEnvVar)
         .filter(JobEnvVar.job_id == job_id, JobEnvVar.var_key == var_key)
@@ -194,13 +266,8 @@ def set_env_var(
 def set_env_vars_bulk(
     db: Session, job_id: str, user_id: int, env_vars: List[dict]
 ) -> List[JobEnvVar]:
-    """
-    Replace ALL environment variables for a job with the provided list.
-    Each dict must have 'var_key' and 'var_value'.
-    """
+    """Replace ALL environment variables for a job."""
     user_salt = _get_user_salt(db, user_id)
-
-    # Delete all existing env vars for this job
     db.query(JobEnvVar).filter(JobEnvVar.job_id == job_id).delete()
 
     created = []
@@ -221,10 +288,7 @@ def set_env_vars_bulk(
 
 
 def get_env_vars(db: Session, job_id: str, user_id: int) -> List[dict]:
-    """
-    Return all env vars for a job, decrypted.
-    Returns list of dicts: [{"id": ..., "var_key": ..., "var_value": ..., ...}]
-    """
+    """Return all env vars for a job, decrypted."""
     user_salt = _get_user_salt(db, user_id)
     env_vars = (
         db.query(JobEnvVar)
@@ -253,16 +317,13 @@ def get_env_vars(db: Session, job_id: str, user_id: int) -> List[dict]:
 
 
 def get_env_vars_decrypted_dict(db: Session, job_id: str, user_id: int) -> dict:
-    """
-    Return a plain {KEY: VALUE} dict of all env vars for a job.
-    Used by the scheduler right before executing a job.
-    """
+    """Return a plain {KEY: VALUE} dict of all env vars for a job."""
     env_list = get_env_vars(db, job_id, user_id)
     return {ev["var_key"]: ev["var_value"] for ev in env_list}
 
 
 def delete_env_var(db: Session, job_id: str, var_key: str) -> bool:
-    """Delete a single env var by key. Returns True if deleted."""
+    """Delete a single env var by key."""
     deleted = (
         db.query(JobEnvVar)
         .filter(JobEnvVar.job_id == job_id, JobEnvVar.var_key == var_key)
@@ -277,12 +338,33 @@ def delete_env_var(db: Session, job_id: str, var_key: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-def create_execution(db: Session, job_id: str) -> JobExecution:
+def create_execution(
+    db: Session, job_id: str, script_version_id: int = None
+) -> JobExecution:
     """Create a new execution record in 'running' status."""
+    # Auto-detect current script version if not provided
+    if script_version_id is None:
+        latest = (
+            db.query(func.max(JobScriptVersion.version))
+            .filter(JobScriptVersion.job_id == job_id)
+            .scalar()
+        )
+        if latest:
+            ver = (
+                db.query(JobScriptVersion)
+                .filter(
+                    JobScriptVersion.job_id == job_id,
+                    JobScriptVersion.version == latest,
+                )
+                .first()
+            )
+            script_version_id = ver.id if ver else None
+
     execution = JobExecution(
         job_id=job_id,
         started_at=_utcnow(),
         status="running",
+        script_version_id=script_version_id,
     )
     db.add(execution)
     db.commit()
@@ -298,25 +380,22 @@ def complete_execution(
     error_summary: Optional[str] = None,
     log_output: Optional[str] = None,
 ) -> JobExecution:
-    """
-    Mark an execution as completed (success or failure).
-    Calculates duration from started_at to now.
-    """
+    """Mark an execution as completed (success or failure)."""
     execution = db.query(JobExecution).filter(JobExecution.id == execution_id).first()
     if not execution:
         raise ValueError(f"Execution {execution_id} not found")
 
     now = _utcnow()
     execution.ended_at = now
-    # Handle both timezone-aware and timezone-naive started_at (SQLite returns naive)
     started = execution.started_at
     if started.tzinfo is None:
         started = started.replace(tzinfo=timezone.utc)
     execution.duration_seconds = (now - started).total_seconds()
     execution.status = status
     execution.exit_code = exit_code
+    execution.pid = None  # Clear PID on completion
     if error_summary:
-        execution.error_summary = error_summary[:500]  # truncate to 500 chars
+        execution.error_summary = error_summary[:500]
     if log_output:
         execution.log_output = log_output
 
@@ -325,16 +404,21 @@ def complete_execution(
     return execution
 
 
+def set_execution_pid(db: Session, execution_id: int, pid: int) -> None:
+    """Store the subprocess PID for a running execution (for cancellation)."""
+    execution = db.query(JobExecution).filter(JobExecution.id == execution_id).first()
+    if execution:
+        execution.pid = pid
+        db.commit()
+
+
 def get_executions(
     db: Session,
     job_id: str,
     limit: int = 50,
     offset: int = 0,
 ) -> Tuple[List[JobExecution], int]:
-    """
-    Return execution history for a job, most recent first.
-    Returns (executions, total_count).
-    """
+    """Return execution history for a job, most recent first."""
     query = (
         db.query(JobExecution)
         .filter(JobExecution.job_id == job_id)
@@ -351,6 +435,36 @@ def get_all_active_jobs(db: Session) -> List[Job]:
 
 
 # ---------------------------------------------------------------------------
+# DAG Dependency Check
+# ---------------------------------------------------------------------------
+
+
+def check_dependencies_met(db: Session, job: Job) -> bool:
+    """
+    Check if all jobs in job.depends_on succeeded in their most recent execution.
+    Returns True if all dependencies are met (or if there are no dependencies).
+    """
+    deps = job.depends_on or []
+    if not deps:
+        return True
+
+    for dep_id in deps:
+        last_exec = (
+            db.query(JobExecution)
+            .filter(JobExecution.job_id == dep_id)
+            .order_by(JobExecution.started_at.desc())
+            .first()
+        )
+        if not last_exec or last_exec.status != "success":
+            logger.info(
+                f"Dependency not met for job {job.id}: "
+                f"dep {dep_id} last status = {last_exec.status if last_exec else 'never_run'}"
+            )
+            return False
+    return True
+
+
+# ---------------------------------------------------------------------------
 # Script Version History
 # ---------------------------------------------------------------------------
 
@@ -362,7 +476,6 @@ def get_script_versions(
     job = get_job(db, job_id, user_id)
     if not job:
         return [], 0
-
     query = (
         db.query(JobScriptVersion)
         .filter(JobScriptVersion.job_id == job_id)
@@ -389,24 +502,18 @@ def get_script_version(
 
 def restore_script_version(
     db: Session, job_id: str, user_id: int, version: int
-) -> Optional[Job]:
-    """
-    Restore a job's script to a previous version.
-    Creates a new version entry with the restored content.
-    """
+) -> Optional[dict]:
+    """Restore a job's script to a previous version."""
     job = get_job(db, job_id, user_id)
     if not job:
         return None
-
     target = get_script_version(db, job_id, user_id, version)
     if not target:
         return None
 
-    # Update current script
     job.script_content = target.script_content
     job.script_type = target.script_type
 
-    # Create a new version entry
     latest = (
         db.query(func.max(JobScriptVersion.version))
         .filter(JobScriptVersion.job_id == job_id)
@@ -420,11 +527,10 @@ def restore_script_version(
         change_summary=f"Restored from version {version}",
     )
     db.add(new_version)
-
     db.commit()
     db.refresh(job)
     logger.info(f"Restored job {job_id} to script version {version}")
-    return job
+    return _enrich_job_response(db, job)
 
 
 # ---------------------------------------------------------------------------
@@ -432,11 +538,8 @@ def restore_script_version(
 # ---------------------------------------------------------------------------
 
 
-def duplicate_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
-    """
-    Duplicate a job — copies name, description, script, cron, and env vars.
-    The new job is created as paused (is_active=False).
-    """
+def duplicate_job(db: Session, job_id: str, user_id: int) -> Optional[dict]:
+    """Duplicate a job — copies name, description, script, cron, and env vars."""
     original = get_job(db, job_id, user_id)
     if not original:
         return None
@@ -448,12 +551,13 @@ def duplicate_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
         script_content=original.script_content,
         script_type=original.script_type,
         cron_expression=original.cron_expression,
-        is_active=False,  # start paused so user can review
+        is_active=False,
+        timeout_seconds=original.timeout_seconds,
+        depends_on=original.depends_on or [],
     )
     db.add(new_job)
     db.flush()
 
-    # Save initial version
     version = JobScriptVersion(
         job_id=new_job.id,
         version=1,
@@ -466,19 +570,25 @@ def duplicate_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
     # Copy env vars
     original_env = db.query(JobEnvVar).filter(JobEnvVar.job_id == job_id).all()
     for ev in original_env:
-        new_ev = JobEnvVar(
-            job_id=new_job.id,
-            var_key=ev.var_key,
-            encrypted_value=ev.encrypted_value,  # same encryption, same user
+        db.add(
+            JobEnvVar(
+                job_id=new_job.id,
+                var_key=ev.var_key,
+                encrypted_value=ev.encrypted_value,
+            )
         )
-        db.add(new_ev)
+
+    # Copy tags
+    original_tags = db.query(JobTag).filter(JobTag.job_id == job_id).all()
+    for jt in original_tags:
+        db.add(JobTag(job_id=new_job.id, tag_id=jt.tag_id))
 
     db.commit()
     db.refresh(new_job)
     logger.info(
         f"Duplicated job '{original.name}' -> '{new_job.name}' (id={new_job.id})"
     )
-    return new_job
+    return _enrich_job_response(db, new_job)
 
 
 # ---------------------------------------------------------------------------
@@ -487,15 +597,115 @@ def duplicate_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
 
 
 def get_next_runs(cron_expression: str, count: int = 5) -> List[str]:
-    """
-    Compute the next N scheduled run times from now for a cron expression.
-    Returns a list of ISO-formatted UTC datetime strings.
-    """
+    """Compute the next N scheduled run times for a cron expression."""
     from croniter import croniter
 
     if not croniter.is_valid(cron_expression):
         return []
-
     base = _utcnow()
     cron = croniter(cron_expression, base)
     return [cron.get_next(datetime).isoformat() for _ in range(count)]
+
+
+# ---------------------------------------------------------------------------
+# Tag CRUD
+# ---------------------------------------------------------------------------
+
+
+def create_tag(db: Session, user_id: int, name: str, color: str = "#6366f1") -> Tag:
+    """Create a new tag for a user."""
+    tag = Tag(user_id=user_id, name=name, color=color)
+    db.add(tag)
+    db.commit()
+    db.refresh(tag)
+    return tag
+
+
+def list_tags(db: Session, user_id: int) -> List[dict]:
+    """Return all tags for a user with job counts."""
+    tags = db.query(Tag).filter(Tag.user_id == user_id).order_by(Tag.name).all()
+    result = []
+    for t in tags:
+        count = (
+            db.query(func.count(JobTag.id)).filter(JobTag.tag_id == t.id).scalar() or 0
+        )
+        result.append(
+            {
+                "id": t.id,
+                "name": t.name,
+                "color": t.color,
+                "job_count": count,
+                "created_at": t.created_at,
+            }
+        )
+    return result
+
+
+def update_tag(db: Session, tag_id: int, user_id: int, **kwargs) -> Optional[Tag]:
+    """Update a tag."""
+    tag = db.query(Tag).filter(Tag.id == tag_id, Tag.user_id == user_id).first()
+    if not tag:
+        return None
+    for key, value in kwargs.items():
+        if value is not None and hasattr(tag, key):
+            setattr(tag, key, value)
+    db.commit()
+    db.refresh(tag)
+    return tag
+
+
+def delete_tag(db: Session, tag_id: int, user_id: int) -> bool:
+    """Delete a tag."""
+    tag = db.query(Tag).filter(Tag.id == tag_id, Tag.user_id == user_id).first()
+    if not tag:
+        return False
+    db.delete(tag)
+    db.commit()
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Notification Settings
+# ---------------------------------------------------------------------------
+
+
+def get_notification_settings(
+    db: Session, user_id: int
+) -> Optional[NotificationSettings]:
+    """Get notification settings for a user."""
+    return (
+        db.query(NotificationSettings)
+        .filter(NotificationSettings.user_id == user_id)
+        .first()
+    )
+
+
+def upsert_notification_settings(
+    db: Session, user_id: int, **kwargs
+) -> NotificationSettings:
+    """Create or update notification settings."""
+    settings = get_notification_settings(db, user_id)
+    if not settings:
+        settings = NotificationSettings(user_id=user_id)
+        db.add(settings)
+
+    for key, value in kwargs.items():
+        if value is not None and hasattr(settings, key):
+            setattr(settings, key, value)
+
+    db.commit()
+    db.refresh(settings)
+    return settings
+
+
+# ---------------------------------------------------------------------------
+# Job Templates
+# ---------------------------------------------------------------------------
+
+
+def list_templates(db: Session, user_id: int = None) -> List[JobTemplate]:
+    """Return all templates: system-wide + user's own."""
+    query = db.query(JobTemplate).filter(
+        (JobTemplate.user_id == None) | (JobTemplate.user_id == user_id)  # noqa: E711
+    )
+    return query.order_by(JobTemplate.category, JobTemplate.name).all()

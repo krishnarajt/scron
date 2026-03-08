@@ -14,6 +14,8 @@ Authorization headers in the browser.
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, Query
 from app.services import log_broadcaster
 from app.services.auth_service import verify_access_token
+from app.db.database import SessionLocal
+from app.db.models import Job, JobExecution
 from app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +33,31 @@ async def _authenticate_ws(websocket: WebSocket, token: str) -> int | None:
         await websocket.close(code=4001, reason="Invalid token")
         return None
     return user_id
+
+
+def _user_owns_job(user_id: int, job_id: str) -> bool:
+    """Check if the user owns the given job. Uses a short-lived DB session."""
+    db = SessionLocal()
+    try:
+        job = db.query(Job).filter(Job.id == job_id, Job.user_id == user_id).first()
+        return job is not None
+    finally:
+        db.close()
+
+
+def _user_owns_execution(user_id: int, execution_id: int) -> bool:
+    """Check if the user owns the job that produced the given execution."""
+    db = SessionLocal()
+    try:
+        execution = (
+            db.query(JobExecution)
+            .join(Job, Job.id == JobExecution.job_id)
+            .filter(JobExecution.id == execution_id, Job.user_id == user_id)
+            .first()
+        )
+        return execution is not None
+    finally:
+        db.close()
 
 
 @router.websocket("/logs/{execution_id}")
@@ -52,6 +79,15 @@ async def stream_execution_logs(
     """
     user_id = await _authenticate_ws(websocket, token)
     if user_id is None:
+        return
+
+    # Verify ownership before accepting the connection
+    if not _user_owns_execution(user_id, execution_id):
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "message": "Not authorized to view this execution"}
+        )
+        await websocket.close(code=4003)
         return
 
     await websocket.accept()
@@ -93,6 +129,15 @@ async def stream_job_logs(
     """
     user_id = await _authenticate_ws(websocket, token)
     if user_id is None:
+        return
+
+    # Verify ownership before accepting the connection
+    if not _user_owns_job(user_id, job_id):
+        await websocket.accept()
+        await websocket.send_json(
+            {"type": "error", "message": "Not authorized to view this job"}
+        )
+        await websocket.close(code=4003)
         return
 
     await websocket.accept()
@@ -139,13 +184,24 @@ async def list_active_streams(
 ):
     """
     One-shot: returns list of currently active log streams and closes.
-    Useful for the UI to know which executions can be live-tailed.
+    Only returns streams for jobs owned by the authenticated user.
     """
     user_id = await _authenticate_ws(websocket, token)
     if user_id is None:
         return
 
     await websocket.accept()
-    channels = log_broadcaster.get_active_channels()
-    await websocket.send_json({"type": "active_streams", "streams": channels})
+
+    # Filter active channels to only those owned by this user
+    all_channels = log_broadcaster.get_active_channels()
+    owned_job_ids = set()
+    db = SessionLocal()
+    try:
+        jobs = db.query(Job.id).filter(Job.user_id == user_id).all()
+        owned_job_ids = {j.id for j in jobs}
+    finally:
+        db.close()
+
+    user_channels = [ch for ch in all_channels if ch["job_id"] in owned_job_ids]
+    await websocket.send_json({"type": "active_streams", "streams": user_channels})
     await websocket.close()
