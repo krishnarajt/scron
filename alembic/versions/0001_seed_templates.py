@@ -11,8 +11,10 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 
+from app.common import constants
+
 revision: str = "0001_seed_templates"
-down_revision: Union[str, None] = None
+down_revision: Union[str, None] = "fd80b7ede9aa"
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
@@ -168,6 +170,7 @@ echo "Deleted $COUNT files"
 import os
 import sys
 from datetime import datetime
+from app.db.database import DB_SCHEMA
 
 def main():
     print(f"Job started at {datetime.utcnow().isoformat()}")
@@ -199,6 +202,7 @@ def upgrade() -> None:
         sa.column("script_type", sa.String),
         sa.column("default_cron", sa.String),
         sa.column("user_id", sa.Integer),
+        schema=constants.DB_SCHEMA,
     )
     op.bulk_insert(
         templates_table,

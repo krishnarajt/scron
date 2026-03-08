@@ -38,7 +38,7 @@ config.set_main_option("sqlalchemy.url", constants.DATABASE_URL)
 
 # Set up Python logging from alembic.ini
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)  # <-- add this
 
 # The MetaData object for 'autogenerate' support
 target_metadata = Base.metadata
@@ -74,11 +74,19 @@ def run_migrations_online() -> None:
             connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{DB_SCHEMA}"'))
             connection.commit()
 
+        def include_object(object, name, type_, reflected, compare_to):
+            """Only include objects belonging to our schema."""
+            if hasattr(object, "schema"):
+                return object.schema == DB_SCHEMA
+            return True
+
+        # Then pass it to context.configure in run_migrations_online():
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
             version_table_schema=DB_SCHEMA,
             include_schemas=True,
+            include_object=include_object,  # ← add this
         )
 
         with context.begin_transaction():
