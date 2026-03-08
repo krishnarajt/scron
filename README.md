@@ -1,14 +1,32 @@
 # sCron Backend
 
+## Overview
+
 A self-hosted cron job management platform with encrypted environment variables, DAG-based job dependencies, real-time log streaming, and multi-channel notifications. Built to replace fragile crontab entries with a managed, observable, and auditable system.
 
-## Problem Statement
+### Problem Statement
 
 Managing scheduled tasks on Linux servers is painful. Crontab entries are invisible, unversioned, and fail silently. When a nightly backup script breaks, nobody knows until the data is gone. Teams that outgrow crontab typically jump to Airflow or Temporal — systems designed for 500-engineer orgs, not a solo developer running 10 scripts on a VPS.
 
 sCron fills the gap: a lightweight, single-binary-deployable cron manager that gives you visibility, versioning, encryption, and alerting without the operational overhead of enterprise orchestrators.
 
-## Features
+---
+
+## 1. Architecture Diagrams
+
+![alt text](mermaid-diagram-2026-03-08T10-51-08.png)
+
+---
+
+## 2. Detailed Flow & File Breakdown
+
+![alt text](mermaid-diagram-2026-03-08T11-05-52.png)
+ 
+![alt text](mermaid-diagram-2026-03-08T11-07-35.png)
+
+---
+
+## 3. Features
 
 ### Core Scheduling
 - **Cron-based scheduling** with standard 5-field expressions, powered by APScheduler
@@ -68,7 +86,9 @@ sCron fills the gap: a lightweight, single-binary-deployable cron manager that g
 - **Connection pooling** tuned for PostgreSQL (pool_size=10, max_overflow=20, recycle=1800s)
 - **Seed migration** for default job templates
 
-## Tech Stack
+---
+
+## 4. Tech Stack
 
 | Layer | Technology |
 |---|---|
@@ -85,7 +105,9 @@ sCron fills the gap: a lightweight, single-binary-deployable cron manager that g
 | Orchestration | Docker Compose + Kubernetes (Kustomize overlays) |
 | CI/CD | GitHub Actions → GHCR → ArgoCD |
 
-## Project Structure
+---
+
+## 5. Project Structure
 
 ```
 scron/
@@ -145,7 +167,9 @@ scron/
 └── .github/workflows/               # CI: build → push GHCR → update K8s manifest
 ```
 
-## Getting Started
+---
+
+## 6. Getting Started
 
 ### Prerequisites
 - Python 3.11+
@@ -201,7 +225,9 @@ kubectl apply -k k8s/overlays/prod
 alembic upgrade head
 ```
 
-## Environment Variables
+---
+
+## 7. Environment Variables
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
@@ -221,7 +247,9 @@ alembic upgrade head
 | `LOG_LEVEL` | No | `INFO` | Logging level |
 | `LOG_DIR` | No | `logs` | Directory for log files |
 
-## API Overview
+---
+
+## 8. API Overview
 
 | Method | Endpoint | Description |
 |---|---|---|
@@ -256,6 +284,29 @@ alembic upgrade head
 | GET | `/api/config/requirements` | Shared requirements.txt |
 | PUT | `/api/config/requirements` | Update + pip install |
 
-## License
+---
+
+## 9. License
 
 AGPL-3.0
+
+---
+
+## 10. Screenshots
+
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+![alt text](./.images/image.png)
+
+---
+
+## 11. Additional Resources
+
+For development guidance and command references, see [CLAUDE.md](CLAUDE.md).
