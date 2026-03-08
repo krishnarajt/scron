@@ -23,6 +23,36 @@ logger = get_logger(__name__)
 router = APIRouter(prefix="/ws", tags=["WebSocket"])
 
 
+@router.websocket("/logs/active")
+async def list_active_streams(
+    websocket: WebSocket,
+    token: str = Query(default=""),
+):
+    """
+    One-shot: returns list of currently active log streams and closes.
+    Only returns streams for jobs owned by the authenticated user.
+    """
+    user_id = await _authenticate_ws(websocket, token)
+    if user_id is None:
+        return
+
+    await websocket.accept()
+
+    # Filter active channels to only those owned by this user
+    all_channels = log_broadcaster.get_active_channels()
+    owned_job_ids = set()
+    db = SessionLocal()
+    try:
+        jobs = db.query(Job.id).filter(Job.user_id == user_id).all()
+        owned_job_ids = {j.id for j in jobs}
+    finally:
+        db.close()
+
+    user_channels = [ch for ch in all_channels if ch["job_id"] in owned_job_ids]
+    await websocket.send_json({"type": "active_streams", "streams": user_channels})
+    await websocket.close()
+
+
 async def _authenticate_ws(websocket: WebSocket, token: str) -> int | None:
     """Validate token from query param. Returns user_id or None."""
     if not token:
@@ -175,33 +205,3 @@ async def stream_job_logs(
         logger.warning(f"WS error for job {job_id}: {e}")
     finally:
         log_broadcaster.unsubscribe(execution_id, queue)
-
-
-@router.websocket("/logs/active")
-async def list_active_streams(
-    websocket: WebSocket,
-    token: str = Query(default=""),
-):
-    """
-    One-shot: returns list of currently active log streams and closes.
-    Only returns streams for jobs owned by the authenticated user.
-    """
-    user_id = await _authenticate_ws(websocket, token)
-    if user_id is None:
-        return
-
-    await websocket.accept()
-
-    # Filter active channels to only those owned by this user
-    all_channels = log_broadcaster.get_active_channels()
-    owned_job_ids = set()
-    db = SessionLocal()
-    try:
-        jobs = db.query(Job.id).filter(Job.user_id == user_id).all()
-        owned_job_ids = {j.id for j in jobs}
-    finally:
-        db.close()
-
-    user_channels = [ch for ch in all_channels if ch["job_id"] in owned_job_ids]
-    await websocket.send_json({"type": "active_streams", "streams": user_channels})
-    await websocket.close()
