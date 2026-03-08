@@ -298,3 +298,150 @@ def list_executions(
         db, job_id, limit=limit, offset=offset
     )
     return ExecutionListResponse(executions=executions, total=total)
+
+
+# ---------------------------------------------------------------------------
+# Script version history
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{job_id}/versions")
+def list_script_versions(
+    job_id: str,
+    limit: int = Query(default=50, ge=1, le=200),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get script version history for a job (newest first)."""
+    job = job_service.get_job(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    versions, total = job_service.get_script_versions(
+        db, job_id, current_user.id, limit
+    )
+    return {
+        "versions": [
+            {
+                "id": v.id,
+                "job_id": v.job_id,
+                "version": v.version,
+                "script_content": v.script_content,
+                "script_type": v.script_type,
+                "change_summary": v.change_summary,
+                "created_at": v.created_at.isoformat() if v.created_at else None,
+            }
+            for v in versions
+        ],
+        "total": total,
+    }
+
+
+@router.get("/{job_id}/versions/{version}")
+def get_script_version(
+    job_id: str,
+    version: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get a specific script version."""
+    v = job_service.get_script_version(db, job_id, current_user.id, version)
+    if not v:
+        raise HTTPException(status_code=404, detail="Version not found")
+    return {
+        "id": v.id,
+        "job_id": v.job_id,
+        "version": v.version,
+        "script_content": v.script_content,
+        "script_type": v.script_type,
+        "change_summary": v.change_summary,
+        "created_at": v.created_at.isoformat() if v.created_at else None,
+    }
+
+
+@router.post("/{job_id}/versions/{version}/restore", response_model=JobResponse)
+def restore_script_version(
+    job_id: str,
+    version: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Restore a job's script to a previous version."""
+    job = job_service.restore_script_version(db, job_id, current_user.id, version)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job or version not found")
+
+    # Update scheduler if active
+    if job.is_active:
+        register_job(job.id, job.cron_expression)
+
+    return job
+
+
+# ---------------------------------------------------------------------------
+# Duplicate job
+# ---------------------------------------------------------------------------
+
+
+@router.post(
+    "/{job_id}/duplicate",
+    response_model=JobResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def duplicate_job(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Duplicate a job (copies script, cron, env vars). Created as paused."""
+    new_job = job_service.duplicate_job(db, job_id, current_user.id)
+    if not new_job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return new_job
+
+
+# ---------------------------------------------------------------------------
+# Next scheduled runs
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{job_id}/next-runs")
+def get_next_runs(
+    job_id: str,
+    count: int = Query(default=5, ge=1, le=20),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get the next N scheduled run times for a job."""
+    job = job_service.get_job(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    runs = job_service.get_next_runs(job.cron_expression, count)
+    return {"job_id": job_id, "cron_expression": job.cron_expression, "next_runs": runs}
+
+
+# ---------------------------------------------------------------------------
+# Live log stream status
+# ---------------------------------------------------------------------------
+
+
+@router.get("/{job_id}/stream-status")
+def get_stream_status(
+    job_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Check if a job currently has a running execution with a live log stream."""
+    job = job_service.get_job(db, job_id, current_user.id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    from app.services.log_broadcaster import get_channel_for_job
+
+    execution_id = get_channel_for_job(job_id)
+    return {
+        "job_id": job_id,
+        "is_streaming": execution_id is not None,
+        "execution_id": execution_id,
+    }

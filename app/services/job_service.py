@@ -9,8 +9,9 @@ routes call these functions — they never touch models directly.
 from typing import Optional, List, Tuple
 from datetime import datetime, timezone
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from app.db.models import Job, JobEnvVar, JobExecution, User
+from app.db.models import Job, JobEnvVar, JobExecution, JobScriptVersion, User
 from app.services.crypto_service import encrypt_value, decrypt_value
 from app.utils.logging_utils import get_logger
 
@@ -49,7 +50,7 @@ def create_job(
     script_type: str = "python",
     is_active: bool = True,
 ) -> Job:
-    """Create a new job and return it."""
+    """Create a new job and return it. Also saves the initial script as version 1."""
     job = Job(
         user_id=user_id,
         name=name,
@@ -60,6 +61,18 @@ def create_job(
         is_active=is_active,
     )
     db.add(job)
+    db.flush()  # get job.id without committing
+
+    # Save initial script version
+    version = JobScriptVersion(
+        job_id=job.id,
+        version=1,
+        script_content=script_content,
+        script_type=script_type,
+        change_summary="Initial version",
+    )
+    db.add(version)
+
     db.commit()
     db.refresh(job)
     logger.info(f"Created job '{name}' (id={job.id}) for user {user_id}")
@@ -83,11 +96,16 @@ def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job
     """
     Update fields on an existing job.
     Only keys present in kwargs (and not None) are updated.
+    If script_content changes, a new version snapshot is saved.
     Returns the updated job, or None if not found.
     """
     job = get_job(db, job_id, user_id)
     if not job:
         return None
+
+    # Detect if script content is changing
+    new_script = kwargs.get("script_content")
+    script_changed = new_script is not None and new_script != job.script_content
 
     updatable_fields = {
         "name",
@@ -100,6 +118,23 @@ def update_job(db: Session, job_id: str, user_id: int, **kwargs) -> Optional[Job
     for key, value in kwargs.items():
         if key in updatable_fields and value is not None:
             setattr(job, key, value)
+
+    # Save a new script version if script changed
+    if script_changed:
+        # Get the latest version number
+        latest = (
+            db.query(func.max(JobScriptVersion.version))
+            .filter(JobScriptVersion.job_id == job_id)
+            .scalar()
+        ) or 0
+        version = JobScriptVersion(
+            job_id=job_id,
+            version=latest + 1,
+            script_content=new_script,
+            script_type=kwargs.get("script_type") or job.script_type,
+            change_summary=None,
+        )
+        db.add(version)
 
     db.commit()
     db.refresh(job)
@@ -313,3 +348,154 @@ def get_executions(
 def get_all_active_jobs(db: Session) -> List[Job]:
     """Return all active jobs across all users. Used on scheduler startup."""
     return db.query(Job).filter(Job.is_active).all()
+
+
+# ---------------------------------------------------------------------------
+# Script Version History
+# ---------------------------------------------------------------------------
+
+
+def get_script_versions(
+    db: Session, job_id: str, user_id: int, limit: int = 50
+) -> Tuple[List[JobScriptVersion], int]:
+    """Return all script versions for a job, newest first."""
+    job = get_job(db, job_id, user_id)
+    if not job:
+        return [], 0
+
+    query = (
+        db.query(JobScriptVersion)
+        .filter(JobScriptVersion.job_id == job_id)
+        .order_by(JobScriptVersion.version.desc())
+    )
+    total = query.count()
+    versions = query.limit(limit).all()
+    return versions, total
+
+
+def get_script_version(
+    db: Session, job_id: str, user_id: int, version: int
+) -> Optional[JobScriptVersion]:
+    """Return a specific script version."""
+    job = get_job(db, job_id, user_id)
+    if not job:
+        return None
+    return (
+        db.query(JobScriptVersion)
+        .filter(JobScriptVersion.job_id == job_id, JobScriptVersion.version == version)
+        .first()
+    )
+
+
+def restore_script_version(
+    db: Session, job_id: str, user_id: int, version: int
+) -> Optional[Job]:
+    """
+    Restore a job's script to a previous version.
+    Creates a new version entry with the restored content.
+    """
+    job = get_job(db, job_id, user_id)
+    if not job:
+        return None
+
+    target = get_script_version(db, job_id, user_id, version)
+    if not target:
+        return None
+
+    # Update current script
+    job.script_content = target.script_content
+    job.script_type = target.script_type
+
+    # Create a new version entry
+    latest = (
+        db.query(func.max(JobScriptVersion.version))
+        .filter(JobScriptVersion.job_id == job_id)
+        .scalar()
+    ) or 0
+    new_version = JobScriptVersion(
+        job_id=job_id,
+        version=latest + 1,
+        script_content=target.script_content,
+        script_type=target.script_type,
+        change_summary=f"Restored from version {version}",
+    )
+    db.add(new_version)
+
+    db.commit()
+    db.refresh(job)
+    logger.info(f"Restored job {job_id} to script version {version}")
+    return job
+
+
+# ---------------------------------------------------------------------------
+# Duplicate Job
+# ---------------------------------------------------------------------------
+
+
+def duplicate_job(db: Session, job_id: str, user_id: int) -> Optional[Job]:
+    """
+    Duplicate a job — copies name, description, script, cron, and env vars.
+    The new job is created as paused (is_active=False).
+    """
+    original = get_job(db, job_id, user_id)
+    if not original:
+        return None
+
+    new_job = Job(
+        user_id=user_id,
+        name=f"{original.name} (copy)",
+        description=original.description,
+        script_content=original.script_content,
+        script_type=original.script_type,
+        cron_expression=original.cron_expression,
+        is_active=False,  # start paused so user can review
+    )
+    db.add(new_job)
+    db.flush()
+
+    # Save initial version
+    version = JobScriptVersion(
+        job_id=new_job.id,
+        version=1,
+        script_content=original.script_content,
+        script_type=original.script_type,
+        change_summary=f"Duplicated from '{original.name}'",
+    )
+    db.add(version)
+
+    # Copy env vars
+    original_env = db.query(JobEnvVar).filter(JobEnvVar.job_id == job_id).all()
+    for ev in original_env:
+        new_ev = JobEnvVar(
+            job_id=new_job.id,
+            var_key=ev.var_key,
+            encrypted_value=ev.encrypted_value,  # same encryption, same user
+        )
+        db.add(new_ev)
+
+    db.commit()
+    db.refresh(new_job)
+    logger.info(
+        f"Duplicated job '{original.name}' -> '{new_job.name}' (id={new_job.id})"
+    )
+    return new_job
+
+
+# ---------------------------------------------------------------------------
+# Next Scheduled Runs (using croniter)
+# ---------------------------------------------------------------------------
+
+
+def get_next_runs(cron_expression: str, count: int = 5) -> List[str]:
+    """
+    Compute the next N scheduled run times from now for a cron expression.
+    Returns a list of ISO-formatted UTC datetime strings.
+    """
+    from croniter import croniter
+
+    if not croniter.is_valid(cron_expression):
+        return []
+
+    base = _utcnow()
+    cron = croniter(cron_expression, base)
+    return [cron.get_next(datetime).isoformat() for _ in range(count)]

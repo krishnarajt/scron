@@ -29,6 +29,7 @@ from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_MISSED
 from app.common import constants
 from app.db.database import SessionLocal
 from app.services import job_service
+from app.services import log_broadcaster
 from app.utils.logging_utils import get_logger
 
 logger = get_logger(__name__)
@@ -267,12 +268,13 @@ def _execute_job(job_id: str) -> None:
         1. Acquire the concurrency semaphore (blocks if all slots full).
         2. Open a fresh DB session and load the job.
         3. Create a JobExecution record (status=running).
-        4. Materialise the script to a temp file on disk.
-        5. Decrypt env vars and build a subprocess environment.
-        6. Execute the script via subprocess.
-        7. Capture head+tail of combined stdout/stderr.
-        8. Record result (success/failure, duration, exit code, logs).
-        9. Release the semaphore.
+        4. Open a broadcast channel for real-time log streaming.
+        5. Materialise the script to a temp file on disk.
+        6. Decrypt env vars and build a subprocess environment.
+        7. Execute the script via Popen, reading output line-by-line.
+        8. Broadcast each line to WebSocket subscribers in real time.
+        9. Record result (success/failure, duration, exit code, logs).
+       10. Close the broadcast channel and release the semaphore.
     """
     import subprocess
 
@@ -297,6 +299,9 @@ def _execute_job(job_id: str) -> None:
         execution = job_service.create_execution(db, job_id)
         logger.info(f"Job {job_id}: execution {execution.id} started")
 
+        # Open broadcast channel for live log streaming
+        log_broadcaster.create_channel(execution.id, job_id)
+
         # Materialise script to disk
         script_path = _materialise_script(job)
 
@@ -312,23 +317,58 @@ def _execute_job(job_id: str) -> None:
         if job.script_type == "bash":
             cmd = ["bash", script_path]
         else:
-            cmd = ["python3", script_path]
+            cmd = ["python3", "-u", script_path]  # -u for unbuffered output
 
-        # Execute the script
-        result = subprocess.run(
+        # Execute the script with Popen for real-time output capture
+        process = subprocess.Popen(
             cmd,
             env=proc_env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # merge stderr into stdout for line ordering
             text=True,
-            timeout=3600,  # 1-hour hard timeout per job
+            bufsize=1,  # line-buffered
             cwd=_scripts_dir,
         )
 
-        # Build log output (first N + last N lines of combined stdout+stderr)
-        log_output = _build_log_output(result.stdout or "", result.stderr or "")
+        # Read output line-by-line and broadcast
+        all_lines = []
+        try:
+            for line in process.stdout:
+                stripped = line.rstrip("\n")
+                all_lines.append(stripped)
+                log_broadcaster.publish_line(execution.id, stripped)
+        except Exception as read_err:
+            logger.warning(f"Job {job_id}: error reading output: {read_err}")
+
+        # Wait for process to finish (with timeout)
+        try:
+            process.wait(timeout=3600)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+            log_broadcaster.publish_line(
+                execution.id, "--- TIMEOUT: job killed after 3600 seconds ---"
+            )
+            if execution:
+                job_service.complete_execution(
+                    db,
+                    execution.id,
+                    status="failure",
+                    exit_code=-1,
+                    error_summary="Job timed out after 3600 seconds",
+                    log_output="\n".join(all_lines[-100:]),
+                )
+            log_broadcaster.close_channel(execution.id)
+            logger.error(f"Job {job_id}: timed out")
+            return
+
+        # Build log output (head + tail lines)
+        combined_output = "\n".join(all_lines)
+        log_output = _build_log_output(combined_output, "")
 
         # Record success or failure
-        if result.returncode == 0:
+        exit_code = process.returncode
+        if exit_code == 0:
             job_service.complete_execution(
                 db,
                 execution.id,
@@ -338,30 +378,22 @@ def _execute_job(job_id: str) -> None:
             )
             logger.info(f"Job {job_id}: execution {execution.id} succeeded")
         else:
-            error_summary = (result.stderr or "")[-constants.MAX_ERROR_SUMMARY_LENGTH :]
+            # Extract last N chars as error summary
+            error_summary = combined_output[-constants.MAX_ERROR_SUMMARY_LENGTH :]
             job_service.complete_execution(
                 db,
                 execution.id,
                 status="failure",
-                exit_code=result.returncode,
+                exit_code=exit_code,
                 error_summary=error_summary,
                 log_output=log_output,
             )
             logger.warning(
-                f"Job {job_id}: execution {execution.id} failed "
-                f"(exit code {result.returncode})"
+                f"Job {job_id}: execution {execution.id} failed (exit code {exit_code})"
             )
 
-    except subprocess.TimeoutExpired:
-        if execution:
-            job_service.complete_execution(
-                db,
-                execution.id,
-                status="failure",
-                exit_code=-1,
-                error_summary="Job timed out after 3600 seconds",
-            )
-        logger.error(f"Job {job_id}: timed out")
+        # Close the broadcast channel
+        log_broadcaster.close_channel(execution.id)
 
     except Exception as e:
         logger.error(f"Job {job_id}: unexpected error during execution: {e}")
@@ -376,6 +408,7 @@ def _execute_job(job_id: str) -> None:
                 )
             except Exception:
                 logger.error(f"Job {job_id}: failed to record execution failure")
+            log_broadcaster.close_channel(execution.id)
 
     finally:
         db.close()

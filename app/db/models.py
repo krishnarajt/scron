@@ -105,6 +105,12 @@ class Job(Base):
         cascade="all, delete-orphan",
         order_by="desc(JobExecution.started_at)",
     )
+    script_versions = relationship(
+        "JobScriptVersion",
+        back_populates="job",
+        cascade="all, delete-orphan",
+        order_by="desc(JobScriptVersion.version)",
+    )
 
     __table_args__ = (Index("ix_jobs_user_active", "user_id", "is_active"),)
 
@@ -140,6 +146,38 @@ class JobEnvVar(Base):
 
     __table_args__ = (
         Index("ix_job_env_vars_job_key", "job_id", "var_key", unique=True),
+    )
+
+
+class JobScriptVersion(Base):
+    """
+    Immutable snapshot of a job's script at a point in time.
+    A new row is created every time the script_content is changed via update.
+    """
+
+    __tablename__ = "job_script_versions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    job_id = Column(
+        String(36),
+        ForeignKey("jobs.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Monotonically increasing version number per job (1, 2, 3, …)
+    version = Column(Integer, nullable=False)
+    # The script content at this version
+    script_content = Column(Text, nullable=False)
+    script_type = Column(String(20), nullable=False, default="python")
+    # Optional human-readable label, e.g. "Added retry logic"
+    change_summary = Column(String(500), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    # Relationships
+    job = relationship("Job", back_populates="script_versions")
+
+    __table_args__ = (
+        Index("ix_job_script_versions_job_ver", "job_id", "version", unique=True),
     )
 
 
