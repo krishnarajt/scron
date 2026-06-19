@@ -21,7 +21,7 @@ dependencies = [
     "python-json-logger>=4.0.0",
     "croniter>=6.0.0",
     "apscheduler>=3.11.2",
-    "cryptography>=46.0.5",
+    "cryptography>=48.0.1",
     "asyncio>=4.0.0",
 ]
 
