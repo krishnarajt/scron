@@ -14,7 +14,7 @@ spec:
     spec:
       containers:
         - name: app
-          image: ghcr.io/krishnarajt/scron:git-f87992c6ebfbb724af9e561feaadb9cbce10f058
+          image: ghcr.io/krishnarajt/scron:git-b34972cdaa3b178927a11dac660b5f541e971b40
           imagePullPolicy: Always
           ports:
             - containerPort: 8000
